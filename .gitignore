@@ -80,3 +80,7 @@ distrib_releasedbg/
 new_addresses.txt
 
 packaged/*
+
+# graphify: only the report is tracked; run `graphify update .` to rebuild the rest
+graphify-out/*
+!graphify-out/GRAPH_REPORT.md

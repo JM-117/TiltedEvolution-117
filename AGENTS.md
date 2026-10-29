@@ -131,3 +131,9 @@ xmake project -k vsxmake                 # regenerate the VS solution; rerun aft
   `Code/client/ModCompat`.
 - Commits: short imperative title describing the user-visible effect ("Fix X when Y", "Stop X doing Y"), and
   a short body explaining why.
+
+## Code graph (graphify)
+
+Before searching the code, read `graphify-out/GRAPH_REPORT.md` (god nodes, communities, hubs). For
+node-level queries run `graphify update .` (~30 s, no API key) and then `graphify query "<question>"`,
+`graphify explain "<node>"` or `graphify path "A" "B"`. CI refreshes the report on every push to `dev`.
