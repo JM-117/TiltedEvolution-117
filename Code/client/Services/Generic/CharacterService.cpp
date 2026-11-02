@@ -12,6 +12,9 @@
 
 #include <Forms/TESNPC.h>
 #include <ExtraData/ExtraOwnership.h>
+#include <AI/AIProcess.h>
+#include <Forms/TESPackage.h>
+#include <map>
 #include <Interface/UI.h>
 #include <Forms/TESQuest.h>
 
@@ -298,6 +301,32 @@ void CharacterService::OnActorRemoved(const ActorRemovedEvent& acEvent) noexcept
 
 void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
 {
+    // DIAGNOSTIC (remove before upstream): log each mount's control/package changes to find why a dismounted horse wanders.
+    {
+        static std::chrono::steady_clock::time_point lastLog;
+        static std::map<uint32_t, std::string> lastState;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastLog > 500ms)
+        {
+            lastLog = now;
+            for (auto entity : m_world.view<FormIdComponent>())
+            {
+                Actor* pActor = Cast<Actor>(TESForm::GetById(m_world.get<FormIdComponent>(entity).Id));
+                if (!pActor || !pActor->IsMount())
+                    continue;
+                const uint32_t pkg = (pActor->currentProcess && pActor->currentProcess->package) ? pActor->currentProcess->package->formID : 0;
+                const char* ctl = m_world.all_of<LocalComponent>(entity) ? "local" : (m_world.all_of<RemoteComponent>(entity) ? "remote" : "none");
+                const auto state = fmt::format("{} pkg={:X}", ctl, pkg);
+                auto& last = lastState[pActor->formID];
+                if (last != state)
+                {
+                    spdlog::info("MountDiag {:X}: {} (was {})", pActor->formID, state, last.empty() ? "-" : last);
+                    last = state;
+                }
+            }
+        }
+    }
+
     RunSpawnUpdates();
     RunLocalUpdates();
     RunFactionsUpdates();
