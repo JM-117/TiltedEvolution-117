@@ -149,6 +149,20 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
         }
     }
 
+    // Diagnostic: once a second, what the owner sent for this remote mount, to compare mounts that sync with ones that don't
+    if (apActor->IsMount() && second.Tick - aInterpolationComponent.MountLastLogTick >= 1000)
+    {
+        aInterpolationComponent.MountLastLogTick = second.Tick;
+        std::string floats, ints, bools;
+        for (const float f : second.Variables.Floats)
+            floats += fmt::format("{:.1f} ", f);
+        for (const auto i : second.Variables.Integers)
+            ints += fmt::format("{} ", i);
+        for (const bool b : second.Variables.Booleans)
+            bools += b ? '1' : '0';
+        spdlog::info("MountVars {:X}: descriptor={} moving={} floats=[{}] ints=[{}] bools={}", apActor->formID, apActor->GetExtension()->GraphDescriptorHash, aInterpolationComponent.IsMountMoving, floats, ints, bools);
+    }
+
     if (apActor->currentProcess && apActor->currentProcess->middleProcess)
     {
         apActor->currentProcess->middleProcess->direction = second.Direction;

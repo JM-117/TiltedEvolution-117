@@ -35,4 +35,6 @@ struct InterpolationComponent
     bool IsMountMoving{false};
     // Tick the horse's Speed first dropped below the stop threshold, 0 while it didn't
     uint64_t MountLowSpeedSince{0};
+    // Tick of the last diagnostic line logged for this mount
+    uint64_t MountLastLogTick{0};
 };
