@@ -108,6 +108,7 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
 
     // The horse behavior enters and leaves locomotion only on moveStart/moveStop. The owner's engine raises them outside
     // ActorMediator and remote actors skip the engine update, so derive them from the synced Speed (first float of the descriptor).
+    // STR doesn't forward PairEnd either, which leaves a remote horse parked in its mount state, so send it before moveStart.
     if (apActor->GetExtension()->GraphDescriptorHash == AnimationGraphDescriptor_HorseRootBehavior::m_key && !second.Variables.Floats.empty())
     {
         const float cSpeed = second.Variables.Floats[0];
@@ -132,43 +133,23 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
 
         if (cWasMoving != aInterpolationComponent.IsMountMoving)
         {
-            // The horse graph parks in MountSynced/DismountSynced until PairEnd and only moveStart from the default
-            // state starts the legs, STR never forwards PairEnd. Experiment: close the paired state first and log if it took.
             if (aInterpolationComponent.IsMountMoving)
             {
+                // After mounting, the graph stays in MountSynced/DismountSynced until PairEnd and moveStart is refused there.
+                // The state change only applies on the next graph update, so a refused moveStart is retried on the next
+                // snapshot. shortcut: retries every snapshot while refused, cap it if some state ever never accepts it.
                 BSFixedString pairEnd("PairEnd");
-                const bool cPairEndSent = apActor->SendAnimationEvent(&pairEnd);
-                spdlog::info("Mount {:X}: PairEnd sent={}", apActor->formID, cPairEndSent);
+                apActor->SendAnimationEvent(&pairEnd);
+                BSFixedString moveStart("moveStart");
+                if (!apActor->SendAnimationEvent(&moveStart))
+                    aInterpolationComponent.IsMountMoving = false;
             }
-            BSFixedString event(aInterpolationComponent.IsMountMoving ? "moveStart" : "moveStop");
-            const bool cSent = apActor->SendAnimationEvent(&event);
-            spdlog::info("Mount {:X}: {} sent={} speed={:.1f}", apActor->formID, event.AsAscii(), cSent, cSpeed);
+            else
+            {
+                BSFixedString moveStop("moveStop");
+                apActor->SendAnimationEvent(&moveStop);
+            }
         }
-    }
-    else if (apActor->IsMount())
-    {
-        // Logged once per distinct graph, a mount whose graph is not the horse one never gets moveStart/moveStop
-        static uint64_t s_lastLoggedHash = 0;
-        const auto cHash = apActor->GetExtension()->GraphDescriptorHash;
-        if (cHash != s_lastLoggedHash)
-        {
-            s_lastLoggedHash = cHash;
-            spdlog::info("Mount {:X}: graph descriptor {} is not the horse one, floats={}", apActor->formID, cHash, second.Variables.Floats.size());
-        }
-    }
-
-    // Diagnostic: once a second, what the owner sent for this remote mount, to compare mounts that sync with ones that don't
-    if (apActor->IsMount() && second.Tick - aInterpolationComponent.MountLastLogTick >= 1000)
-    {
-        aInterpolationComponent.MountLastLogTick = second.Tick;
-        std::string floats, ints, bools;
-        for (const float f : second.Variables.Floats)
-            floats += fmt::format("{:.1f} ", f);
-        for (const auto i : second.Variables.Integers)
-            ints += fmt::format("{} ", i);
-        for (const bool b : second.Variables.Booleans)
-            bools += b ? '1' : '0';
-        spdlog::info("MountVars {:X}: descriptor={} moving={} floats=[{}] ints=[{}] bools={}", apActor->formID, apActor->GetExtension()->GraphDescriptorHash, aInterpolationComponent.IsMountMoving, floats, ints, bools);
     }
 
     if (apActor->currentProcess && apActor->currentProcess->middleProcess)
