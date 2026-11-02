@@ -316,7 +316,7 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
                     continue;
                 const uint32_t pkg = (pActor->currentProcess && pActor->currentProcess->package) ? pActor->currentProcess->package->formID : 0;
                 const char* ctl = m_world.all_of<LocalComponent>(entity) ? "local" : (m_world.all_of<RemoteComponent>(entity) ? "remote" : "none");
-                const auto state = fmt::format("{} pkg={:X}", ctl, pkg);
+                const auto state = fmt::format("{} pkg={:X} ridden={}", ctl, pkg, pActor->extraData.GetByType(ExtraDataType::Interaction) != nullptr);
                 auto& last = lastState[pActor->formID];
                 if (last != state)
                 {

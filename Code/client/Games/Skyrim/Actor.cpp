@@ -312,7 +312,7 @@ void Actor::SetWeaponDrawnEx(bool aDraw) noexcept
     g_forceAnimation = false;
 }
 
-static thread_local bool s_execInitPackage = false;
+thread_local bool s_execInitPackage = false;
 
 void Actor::SetPackage(TESPackage* apPackage) noexcept
 {
@@ -1194,6 +1194,13 @@ uint64_t TP_MAKE_THISCALL(HookProcessResponse, void, DialogueItem* apVoice, Acto
 
 bool TP_MAKE_THISCALL(HookInitiateMountPackage, Actor, Actor* apMount)
 {
+    // A ridden mount carries ExtraInteraction. Taking it over would steal the reins from its rider.
+    if (apMount && apThis->GetExtension()->IsLocal() && apMount->extraData.GetByType(ExtraDataType::Interaction))
+    {
+        spdlog::info("Mount {:X} is already ridden, {:X} cannot mount it", apMount->formID, apThis->formID);
+        return false;
+    }
+
     if (apMount && apThis->GetExtension()->IsLocal())
         World::Get().GetRunner().Trigger(MountEvent(apThis->formID, apMount->formID));
 
