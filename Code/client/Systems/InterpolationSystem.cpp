@@ -132,6 +132,14 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
 
         if (cWasMoving != aInterpolationComponent.IsMountMoving)
         {
+            // The horse graph parks in MountSynced/DismountSynced until PairEnd and only moveStart from the default
+            // state starts the legs, STR never forwards PairEnd. Experiment: close the paired state first and log if it took.
+            if (aInterpolationComponent.IsMountMoving)
+            {
+                BSFixedString pairEnd("PairEnd");
+                const bool cPairEndSent = apActor->SendAnimationEvent(&pairEnd);
+                spdlog::info("Mount {:X}: PairEnd sent={}", apActor->formID, cPairEndSent);
+            }
             BSFixedString event(aInterpolationComponent.IsMountMoving ? "moveStart" : "moveStop");
             const bool cSent = apActor->SendAnimationEvent(&event);
             spdlog::info("Mount {:X}: {} sent={} speed={:.1f}", apActor->formID, event.AsAscii(), cSent, cSpeed);
