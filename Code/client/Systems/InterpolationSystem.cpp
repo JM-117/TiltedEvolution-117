@@ -7,6 +7,8 @@
 #include <Misc/MiddleProcess.h>
 
 #include <Games/References.h>
+#include <Misc/BSFixedString.h>
+#include <Structs/Skyrim/AnimationGraphDescriptor_HorseRootBehavior.h>
 #include <World.h>
 
 namespace
@@ -20,6 +22,9 @@ constexpr float cMaxPositionCorrection = 256.f;
 // Time constant of the correction fading out, ~95% of it is gone after three times this
 constexpr double cPositionCorrectionTime = 50.0;
 constexpr size_t cMaxTimePoints = 64;
+// Speed of a horse above which it counts as moving, and below which it counts as stopped (hysteresis against flicker)
+constexpr float cMountStartSpeed = 10.f;
+constexpr float cMountStopSpeed = 1.f;
 } // namespace
 
 void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterpolationComponent, const double aNow) noexcept
@@ -98,6 +103,24 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
 
     apActor->ForcePosition(aInterpolationComponent.Position);
     apActor->LoadAnimationVariables(second.Variables);
+
+    // The horse behavior enters and leaves locomotion only on moveStart/moveStop. The owner's engine raises them outside
+    // ActorMediator and remote actors skip the engine update, so derive them from the synced Speed (first float of the descriptor).
+    if (apActor->GetExtension()->GraphDescriptorHash == AnimationGraphDescriptor_HorseRootBehavior::m_key && !second.Variables.Floats.empty())
+    {
+        const float cSpeed = second.Variables.Floats[0];
+        const bool cWasMoving = aInterpolationComponent.IsMountMoving;
+        if (!cWasMoving && cSpeed > cMountStartSpeed)
+            aInterpolationComponent.IsMountMoving = true;
+        else if (cWasMoving && cSpeed < cMountStopSpeed)
+            aInterpolationComponent.IsMountMoving = false;
+
+        if (cWasMoving != aInterpolationComponent.IsMountMoving)
+        {
+            BSFixedString event(aInterpolationComponent.IsMountMoving ? "moveStart" : "moveStop");
+            apActor->SendAnimationEvent(&event);
+        }
+    }
 
     if (apActor->currentProcess && apActor->currentProcess->middleProcess)
     {

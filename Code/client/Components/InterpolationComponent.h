@@ -31,4 +31,6 @@ struct InterpolationComponent
     glm::vec3 PositionError{};
     bool IsExtrapolating{false};
     bool HasNewTimePoint{false};
+    // The horse graph only runs its legs between moveStart and moveStop, see InterpolationSystem
+    bool IsMountMoving{false};
 };
