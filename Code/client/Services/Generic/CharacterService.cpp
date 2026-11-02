@@ -11,8 +11,6 @@
 #include <Games/Misc/SubtitleManager.h>
 
 #include <Forms/TESNPC.h>
-#include <Forms/TESFaction.h>
-#include <ExtraData/ExtraFactionChanges.h>
 #include <ExtraData/ExtraOwnership.h>
 #include <Interface/UI.h>
 #include <Forms/TESQuest.h>
@@ -959,27 +957,19 @@ void CharacterService::OnBeastFormChange(const BeastFormChangeEvent& acEvent) co
 
 namespace
 {
-// Diagnostic: who owns a mount (the "steal" prompt) and which factions the local player is in
-void LogMountOwnership(const char* apWhere, Actor* apMount) noexcept
+constexpr uint32_t kPlayerFactionId = 0xDB1;
+
+// A mount bought by one player stays owned by its stable's faction on every other client, because the owner is only set by
+// the buying client's script, so the others get "steal" and a bounty when they ride it. Party members own each other's mounts.
+void ShareMountOwnerWithParty(Actor* apMount) noexcept
 {
-    uint32_t ownerId = 0;
-    if (auto* pOwnership = Cast<ExtraOwnership>(apMount->extraData.GetByType(ExtraDataType::Ownership)))
-        ownerId = pOwnership->owner ? pOwnership->owner->formID : 0;
+    auto* pOwnership = Cast<ExtraOwnership>(apMount->extraData.GetByType(ExtraDataType::Ownership));
+    TESForm* pPlayerFaction = TESForm::GetById(kPlayerFactionId);
+    if (!pOwnership || !pOwnership->owner || !pPlayerFaction || pOwnership->owner == pPlayerFaction)
+        return;
 
-    std::string factions;
-    auto* pPlayer = PlayerCharacter::Get();
-    if (auto* pNpc = Cast<TESNPC>(pPlayer->baseForm))
-    {
-        for (auto i = 0u; i < pNpc->actorData.factions.length; ++i)
-            factions += fmt::format("{:X}:{} ", pNpc->actorData.factions[i].faction->formID, pNpc->actorData.factions[i].rank);
-    }
-    if (auto* pChanges = Cast<ExtraFactionChanges>(pPlayer->extraData.GetByType(ExtraDataType::Faction)))
-    {
-        for (auto i = 0u; i < pChanges->entries.length; ++i)
-            factions += fmt::format("{:X}:{}(extra) ", pChanges->entries[i].faction->formID, pChanges->entries[i].rank);
-    }
-
-    spdlog::info("MountOwner {}: mount {:X} owner={:X} playerFactions=[{}]", apWhere, apMount->formID, ownerId, factions);
+    spdlog::info("Mount {:X}: owner {:X} -> {:X} for a party rider", apMount->formID, pOwnership->owner->formID, pPlayerFaction->formID);
+    pOwnership->owner = pPlayerFaction;
 }
 } // namespace
 
@@ -1009,9 +999,6 @@ void CharacterService::OnMountEvent(const MountEvent& acEvent) const noexcept
     }
 
     const entt::entity cMountEntity = *mountIt;
-
-    if (Actor* pMountActor = Cast<Actor>(TESForm::GetById(acEvent.MountID)))
-        LogMountOwnership("local mount", pMountActor);
 
     uint32_t mountServerId = 0;
     uint32_t mountOwnershipEpoch = 0;
@@ -1067,7 +1054,13 @@ void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcep
     if (!pMount)
         return;
 
-    LogMountOwnership("remote mount", pMount);
+    const auto* pRiderPlayer = m_world.try_get<PlayerComponent>(*riderIt);
+    if (pRiderPlayer)
+    {
+        const auto& cMembers = m_world.GetPartyService().GetPartyMembers();
+        if (std::find(cMembers.begin(), cMembers.end(), pRiderPlayer->Id) != cMembers.end())
+            ShareMountOwnerWithParty(pMount);
+    }
 
     pRider->InitiateMountPackage(pMount);
 }
