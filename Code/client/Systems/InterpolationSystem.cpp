@@ -118,7 +118,19 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
         if (cWasMoving != aInterpolationComponent.IsMountMoving)
         {
             BSFixedString event(aInterpolationComponent.IsMountMoving ? "moveStart" : "moveStop");
-            apActor->SendAnimationEvent(&event);
+            const bool cSent = apActor->SendAnimationEvent(&event);
+            spdlog::info("Mount {:X}: {} sent={} speed={:.1f}", apActor->formID, event.AsAscii(), cSent, cSpeed);
+        }
+    }
+    else if (apActor->IsMount())
+    {
+        // Logged once per distinct graph, a mount whose graph is not the horse one never gets moveStart/moveStop
+        static uint64_t s_lastLoggedHash = 0;
+        const auto cHash = apActor->GetExtension()->GraphDescriptorHash;
+        if (cHash != s_lastLoggedHash)
+        {
+            s_lastLoggedHash = cHash;
+            spdlog::info("Mount {:X}: graph descriptor {} is not the horse one, floats={}", apActor->formID, cHash, second.Variables.Floats.size());
         }
     }
 
