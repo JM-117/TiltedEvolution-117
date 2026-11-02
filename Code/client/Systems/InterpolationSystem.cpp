@@ -25,6 +25,8 @@ constexpr size_t cMaxTimePoints = 64;
 // Speed of a horse above which it counts as moving, and below which it counts as stopped (hysteresis against flicker)
 constexpr float cMountStartSpeed = 10.f;
 constexpr float cMountStopSpeed = 1.f;
+// The owner can report Speed 0 for a single snapshot while the horse is still running, a stop needs it to last this long (ms)
+constexpr uint64_t cMountStopDelay = 300;
 } // namespace
 
 void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterpolationComponent, const double aNow) noexcept
@@ -112,8 +114,21 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
         const bool cWasMoving = aInterpolationComponent.IsMountMoving;
         if (!cWasMoving && cSpeed > cMountStartSpeed)
             aInterpolationComponent.IsMountMoving = true;
-        else if (cWasMoving && cSpeed < cMountStopSpeed)
-            aInterpolationComponent.IsMountMoving = false;
+        else if (cWasMoving)
+        {
+            if (cSpeed >= cMountStopSpeed)
+                aInterpolationComponent.MountLowSpeedSince = 0;
+            else
+            {
+                if (aInterpolationComponent.MountLowSpeedSince == 0)
+                    aInterpolationComponent.MountLowSpeedSince = second.Tick;
+                if (second.Tick - aInterpolationComponent.MountLowSpeedSince >= cMountStopDelay)
+                {
+                    aInterpolationComponent.IsMountMoving = false;
+                    aInterpolationComponent.MountLowSpeedSince = 0;
+                }
+            }
+        }
 
         if (cWasMoving != aInterpolationComponent.IsMountMoving)
         {
