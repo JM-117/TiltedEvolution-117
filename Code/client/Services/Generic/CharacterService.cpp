@@ -307,7 +307,8 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
     RunLocalUpdates();
     RunFactionsUpdates();
     RunRemoteUpdates();
-    SeatRemoteRider();
+    // EXPERIMENT: no forced seat, only network positions
+    // SeatRemoteRider();
     RunExperienceUpdates();
     ApplyCachedWeaponDraws(acUpdateEvent);
     ProcessLeveledConforms();

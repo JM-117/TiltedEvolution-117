@@ -33,7 +33,7 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
     auto pActor = apAction->actor;
     const auto pExtension = pActor->GetExtension();
 
-    if (MountDiagActive())
+    if (MountDiagActive() && apAction->action && apAction->action->formID != 0x46BAF && apAction->action->formID != 0x13002)
         spdlog::info("MountAction actor {:X} local={} forced={} action {:X} event '{}' target '{}' idle {:X} type {} flag {} state {:X}/{:X}", pActor->formID, pExtension->IsLocal(), g_forceAnimation,
                      apAction->action ? apAction->action->formID : 0, apAction->eventName.AsAscii(), apAction->targetEventName.AsAscii(), apAction->idleForm ? apAction->idleForm->formID : 0,
                      apAction->unkInput, apAction->someFlag, pActor->actorState.flags1, pActor->actorState.flags2);
