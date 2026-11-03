@@ -2351,7 +2351,9 @@ void CancelPairRootMotion(Actor* apActor, const InterpolationComponent& acInterp
         return;
 
     const glm::vec3 offset = npcRoot - root;
-    if (glm::length(offset) < 2.f || glm::length(offset) > 500.f || ReadGraphInt(apActor, "bIsSynced") != 1)
+    // Not gated on bIsSynced: the graph leaves the synced state a few frames before the bone returns to the actor, and
+    // stopping early showed the rider 131 units above the saddle for those frames.
+    if (glm::length(offset) < 2.f || glm::length(offset) > 500.f)
         return;
 
     apActor->ForcePosition(acInterpolation.Position - offset);
