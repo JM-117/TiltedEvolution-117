@@ -2335,10 +2335,27 @@ void CharacterService::RunLocalUpdates() const noexcept
 
 namespace
 {
-// A paired animation (mounting a horse) moves the skeleton's root bone away from the actor. On the owner's client the engine
-// moves the actor along and the bone stays on it, so the network position already contains that movement. Remote actors
-// skip that engine update, so the bone offset was added a second time (rider in the air until the animation ended).
-// Measured each frame from the bone itself, so it follows any mount, angle or timing.
+float WrapPi(float aAngle) noexcept
+{
+    while (aAngle > 3.14159265f)
+        aAngle -= 6.2831853f;
+    while (aAngle < -3.14159265f)
+        aAngle += 6.2831853f;
+    return aAngle;
+}
+
+// Heading (Skyrim rotation z) of a node's world rotation (NiMatrix3 at 0x7C). aConvention picks the matrix layout, found once.
+float NodeHeading(NiAVObject* apNode, int aConvention) noexcept
+{
+    const auto* m = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(apNode) + 0x7C);
+    return aConvention == 1 ? std::atan2(m[1], m[4]) : std::atan2(m[3], m[4]);
+}
+
+// A paired animation (mounting a horse) moves and turns the skeleton's root bone away from the actor. On the owner's client
+// the engine moves and turns the actor along and the bone stays on it, so the network position and heading already contain
+// that motion. Remote actors skip that engine update, so it was applied a second time (rider in the air and turned 90 degrees
+// while climbing). Measured each frame from the bone itself, so it follows any mount, angle or timing. Not gated on
+// bIsSynced: the graph leaves the synced state a few frames before the bone returns to the actor.
 void CancelPairRootMotion(Actor* apActor, const InterpolationComponent& acInterpolation) noexcept
 {
     NiNode* pRoot = apActor ? apActor->GetNiNode() : nullptr;
@@ -2346,17 +2363,50 @@ void CancelPairRootMotion(Actor* apActor, const InterpolationComponent& acInterp
         return;
 
     static BSFixedString s_npcRoot("NPC Root [Root]");
-    glm::vec3 root{}, npcRoot{};
-    if (!ReadNodeWorld(pRoot, root) || !ReadNodeWorld(pRoot->GetByName(s_npcRoot), npcRoot))
+    NiAVObject* pBone = pRoot->GetByName(s_npcRoot);
+    glm::vec3 root{}, bone{};
+    if (!ReadNodeWorld(pRoot, root) || !ReadNodeWorld(pBone, bone))
         return;
 
-    const glm::vec3 offset = npcRoot - root;
-    // Not gated on bIsSynced: the graph leaves the synced state a few frames before the bone returns to the actor, and
-    // stopping early showed the rider 131 units above the saddle for those frames.
-    if (glm::length(offset) < 2.f || glm::length(offset) > 500.f)
+    const glm::vec3 offset = bone - root;
+    if (glm::length(offset) > 500.f)
         return;
 
-    apActor->ForcePosition(acInterpolation.Position - offset);
+    // Find which matrix layout gives the actor's heading, once, on an actor standing still with a clearly signed heading.
+    static int s_convention = 0;
+    if (s_convention == 0 && glm::length(offset) < 2.f && std::abs(std::sin(acInterpolation.Yaw)) > 0.3f)
+    {
+        for (int convention = 1; convention <= 2; ++convention)
+        {
+            if (std::abs(WrapPi(NodeHeading(pRoot, convention) - acInterpolation.Yaw)) < 0.05f)
+            {
+                s_convention = convention;
+                spdlog::info("PairRoot heading layout {}", convention);
+            }
+        }
+    }
+
+    const float extraYaw = s_convention ? WrapPi(NodeHeading(pBone, s_convention) - NodeHeading(pRoot, s_convention)) : 0.f;
+    if (glm::length(offset) < 2.f && std::abs(extraYaw) < 0.02f)
+        return;
+
+    // Turn the actor back by the bone's extra turn, and turn the bone's offset with it, so the body lands on the network pose.
+    const float rootYaw = s_convention ? NodeHeading(pRoot, s_convention) : apActor->rotation.z;
+    const float yaw = WrapPi(acInterpolation.Yaw - extraYaw);
+    const float d = yaw - rootYaw;
+    const glm::vec3 turned(offset.x * std::cos(d) + offset.y * std::sin(d), -offset.x * std::sin(d) + offset.y * std::cos(d), offset.z);
+    apActor->ForcePosition(acInterpolation.Position - turned);
+    apActor->SetRotation(apActor->rotation.x, apActor->rotation.y, yaw);
+
+    // DIAGNOSTIC
+    static std::chrono::steady_clock::time_point s_lastLog;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - s_lastLog > 50ms)
+    {
+        s_lastLog = now;
+        spdlog::info("PairRoot {:X} offset ({:.0f},{:.0f},{:.0f}) extraYaw {:.2f} netYaw {:.2f} yaw {:.2f}", apActor->formID, offset.x, offset.y, offset.z, extraYaw,
+                     acInterpolation.Yaw, yaw);
+    }
 }
 } // namespace
 

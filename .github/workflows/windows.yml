@@ -48,6 +48,10 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --force --recursive --depth=1
 
+      - name: Use a neutral branch name in the build tag
+        if: github.ref_type != 'tag'
+        run: git checkout -B release HEAD
+
       - name: Checkout master on tag push
         if: github.ref_type == 'tag'
         run: |
