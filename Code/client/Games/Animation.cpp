@@ -28,6 +28,12 @@ bool MountDiagActive() noexcept
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() < g_mountDiagUntilMs.load();
 }
 
+static bool IsMountRef(TESObjectREFR* apRef) noexcept
+{
+    auto* pActor = Cast<Actor>(apRef);
+    return pActor && pActor->IsMount();
+}
+
 uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apAction)
 {
     auto pActor = apAction->actor;
@@ -57,7 +63,7 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
 
         // The rider's mount pair is retried while it walks to the horse and aborted until it is close enough;
         // replaying the aborted tries starts the animation on the remote copy before the real climb
-        if (apAction->action && apAction->action->formID == 0x13009 && !g_forceAnimation && ((apAction->target && Cast<Actor>(apAction->target) && Cast<Actor>(apAction->target)->IsMount()) || pActor->IsMount()))
+        if (apAction->action && apAction->action->formID == 0x13009 && !g_forceAnimation && (pActor->IsMount() || IsMountRef(*apAction->target)))
         {
             if (MountDiagActive())
                 spdlog::info("MountAction result {} for actor {:X} event '{}' target '{}'", res, pActor->formID, apAction->eventName.AsAscii(), apAction->targetEventName.AsAscii());
