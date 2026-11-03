@@ -20,6 +20,8 @@
 
 #include <BranchInfo.h>
 #include <Components.h>
+#include <NetImmerse/NiNode.h>
+#include <Misc/BSFixedString.h>
 
 #include <Systems/InterpolationSystem.h>
 #include <Systems/AnimationSystem.h>
@@ -312,7 +314,7 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
     RunLocalUpdates();
     RunFactionsUpdates();
     RunRemoteUpdates();
-    SeatRemoteRider();
+    // SeatRemoteRider(); // disabled: measuring where the body really is
     RunExperienceUpdates();
     ApplyCachedWeaponDraws(acUpdateEvent);
     ProcessLeveledConforms();
@@ -1295,8 +1297,57 @@ void CharacterService::SeatRemoteRider() noexcept
     }
 }
 
+namespace
+{
+// DIAGNOSTIC: where the body is really drawn. World translate of a NiAVObject is at 0xA0 (world NiTransform at 0x7C,
+// translate at +0x24, layout from CommonLibSSE-NG); bones are looked up by name.
+bool ReadNodeWorld(NiAVObject* apNode, glm::vec3& aOut) noexcept
+{
+    if (!apNode)
+        return false;
+    const auto* f = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(apNode) + 0xA0);
+    aOut = glm::vec3(f[0], f[1], f[2]);
+    return true;
+}
+
+void LogBody(Actor* apActor) noexcept
+{
+    NiNode* pRoot = apActor ? apActor->GetNiNode() : nullptr;
+    if (!pRoot)
+        return;
+
+    static BSFixedString s_npcRoot("NPC Root [Root]");
+    static BSFixedString s_pelvis("NPC Pelvis [Pelv]");
+    const glm::vec3 ref(apActor->position.x, apActor->position.y, apActor->position.z);
+    glm::vec3 root{}, npcRoot{}, pelvis{};
+    ReadNodeWorld(pRoot, root);
+    const bool hasNpcRoot = ReadNodeWorld(pRoot->GetByName(s_npcRoot), npcRoot);
+    const bool hasPelvis = ReadNodeWorld(pRoot->GetByName(s_pelvis), pelvis);
+    root -= ref;
+    npcRoot -= ref;
+    pelvis -= ref;
+    spdlog::info("Body {:X} ref ({:.0f},{:.0f},{:.0f}) yaw {:.2f} root ({:.0f},{:.0f},{:.0f}) npcRoot{} ({:.0f},{:.0f},{:.0f}) pelvis{} ({:.0f},{:.0f},{:.0f})",
+                 apActor->formID, ref.x, ref.y, ref.z, apActor->rotation.z, root.x, root.y, root.z, hasNpcRoot ? "" : "?", npcRoot.x, npcRoot.y,
+                 npcRoot.z, hasPelvis ? "" : "?", pelvis.x, pelvis.y, pelvis.z);
+}
+} // namespace
+
 void CharacterService::RunMountDismountUpdates() noexcept
 {
+    // DIAGNOSTIC: body of every player (local and remote) every 50 ms
+    {
+        static std::chrono::steady_clock::time_point lastBody;
+        const auto bodyNow = std::chrono::steady_clock::now();
+        if (bodyNow - lastBody > 50ms)
+        {
+            lastBody = bodyNow;
+            LogBody(PlayerCharacter::Get());
+            auto players = m_world.view<PlayerComponent, FormIdComponent>();
+            for (auto entity : players)
+                LogBody(Cast<Actor>(TESForm::GetById(players.get<FormIdComponent>(entity).Id)));
+        }
+    }
+
     // DIAGNOSTIC: follow the local rider's pose relative to its mount for the whole ride, to measure how it gets off
     if (!m_occupiedMounts.empty())
     {
@@ -1333,7 +1384,6 @@ void CharacterService::RunMountDismountUpdates() noexcept
     if (m_localTrace.first)
     {
         if (auto* pLocalRider = Cast<Actor>(TESForm::GetById(m_localTrace.first)))
-            LogGraphVarChanges("local", pLocalRider);
 
         static std::chrono::steady_clock::time_point lastLocalTrace;
         const auto traceNow = std::chrono::steady_clock::now();
@@ -1361,7 +1411,6 @@ void CharacterService::RunMountDismountUpdates() noexcept
     if (m_traceMount.first)
     {
         if (auto* pRemoteRider = Cast<Actor>(TESForm::GetById(m_traceMount.first)))
-            LogGraphVarChanges("remote", pRemoteRider);
         static std::chrono::steady_clock::time_point lastTrace;
         const auto traceNow = std::chrono::steady_clock::now();
         if (traceNow - m_traceStart > 10s)
