@@ -102,6 +102,9 @@ private:
     // DIAGNOSTIC (remove before upstream): form ids of a remote rider and its mount, followed for a few seconds after NotifyMount
     mutable std::pair<uint32_t, uint32_t> m_traceMount{};
     mutable std::chrono::steady_clock::time_point m_traceStart{};
+    // DIAGNOSTIC: same for the local rider, to measure where a rider stands relative to its mount while climbing on
+    mutable std::pair<uint32_t, uint32_t> m_localTrace{};
+    mutable std::chrono::steady_clock::time_point m_localTraceStart{};
 
     void MoveActor(const Actor* apActor, const GameId& acWorldSpaceId, const GameId& acCellId, const Vector3_NetQuantize& acPosition) const noexcept;
 

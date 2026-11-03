@@ -1026,6 +1026,8 @@ void CharacterService::OnMountEvent(const MountEvent& acEvent) const noexcept
     request.MountId = mountServerId;
     request.MountOwnershipEpoch = mountOwnershipEpoch;
 
+    m_localTrace = {acEvent.RiderID, acEvent.MountID};
+    m_localTraceStart = std::chrono::steady_clock::now();
     m_occupiedMounts[mountServerId] = pRiderLocalComponent->Id;
     m_transport.Send(request);
 }
@@ -1146,6 +1148,31 @@ void CharacterService::SeatRemoteRider() noexcept
 
 void CharacterService::RunMountDismountUpdates() noexcept
 {
+    if (m_localTrace.first)
+    {
+        static std::chrono::steady_clock::time_point lastLocalTrace;
+        const auto traceNow = std::chrono::steady_clock::now();
+        if (traceNow - m_localTraceStart > 3s)
+            m_localTrace = {};
+        else if (traceNow - lastLocalTrace > 100ms)
+        {
+            lastLocalTrace = traceNow;
+            const auto* pRider = Cast<Actor>(TESForm::GetById(m_localTrace.first));
+            const auto* pMount = Cast<Actor>(TESForm::GetById(m_localTrace.second));
+            if (pRider && pMount)
+            {
+                const float dx = pRider->position.x - pMount->position.x;
+                const float dy = pRider->position.y - pMount->position.y;
+                const float yaw = pMount->rotation.z;
+                float yawDelta = pRider->rotation.z - yaw;
+                while (yawDelta > 3.14159265f) yawDelta -= 6.2831853f;
+                while (yawDelta < -3.14159265f) yawDelta += 6.2831853f;
+                spdlog::info("MountLocal +{}ms forward {:.0f} right {:.0f} up {:.0f} yawDelta {:.2f}", std::chrono::duration_cast<std::chrono::milliseconds>(traceNow - m_localTraceStart).count(),
+                             dx * std::sin(yaw) + dy * std::cos(yaw), dx * std::cos(yaw) - dy * std::sin(yaw), pRider->position.z - pMount->position.z, yawDelta);
+            }
+        }
+    }
+
     if (m_traceMount.first)
     {
         static std::chrono::steady_clock::time_point lastTrace;
