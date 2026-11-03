@@ -13,6 +13,7 @@
 #include <Misc/BSFixedString.h>
 
 #include <World.h>
+#include <atomic>
 
 TP_THIS_FUNCTION(TPerformAction, uint8_t, ActorMediator, TESActionData* apAction);
 static TPerformAction* RealPerformAction;
@@ -20,10 +21,22 @@ static TPerformAction* RealPerformAction;
 // TODO: make scoped override
 thread_local bool g_forceAnimation = false;
 
+// DIAGNOSTIC: set by CharacterService around a mount; while open, every action is logged
+std::atomic<int64_t> g_mountDiagUntilMs{0};
+bool MountDiagActive() noexcept
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() < g_mountDiagUntilMs.load();
+}
+
 uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apAction)
 {
     auto pActor = apAction->actor;
     const auto pExtension = pActor->GetExtension();
+
+    if (MountDiagActive())
+        spdlog::info("MountAction actor {:X} local={} forced={} action {:X} event '{}' target '{}' idle {:X} type {} flag {} state {:X}/{:X}", pActor->formID, pExtension->IsLocal(), g_forceAnimation,
+                     apAction->action ? apAction->action->formID : 0, apAction->eventName.AsAscii(), apAction->targetEventName.AsAscii(), apAction->idleForm ? apAction->idleForm->formID : 0,
+                     apAction->unkInput, apAction->someFlag, pActor->actorState.flags1, pActor->actorState.flags2);
 
     if (!pExtension->IsRemote() || g_forceAnimation)
     {

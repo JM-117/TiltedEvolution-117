@@ -12,6 +12,7 @@
 #include <Misc/MiddleProcess.h>
 
 #include <Messages/RequestActionEvents.h>
+extern bool MountDiagActive() noexcept;
 #include <Structs/Movement.h>
 
 #include <Components.h>
@@ -61,6 +62,9 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
         actionData.someFlag = ((first.Type & 0x4) != 0) ? 1 : 0;
 
         const auto result = ActorMediator::Get()->ForceAction(&actionData);
+
+        if (MountDiagActive())
+            spdlog::info("MountAction replay on {:X}: action {:X} event '{}' result {}", apActor->formID, actionId, first.EventName, result);
 
         if (aAnimationComponent.ReplayCount > 0)
             aAnimationComponent.ReplayCount--;

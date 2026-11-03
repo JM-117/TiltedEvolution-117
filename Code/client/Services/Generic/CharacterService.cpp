@@ -70,6 +70,7 @@
 #include <Messages/NotifyActorTeleport.h>
 
 #include <World.h>
+#include <atomic>
 #include <Games/TES.h>
 
 CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
@@ -960,6 +961,8 @@ void CharacterService::OnBeastFormChange(const BeastFormChangeEvent& acEvent) co
     m_transport.Send(request);
 }
 
+extern std::atomic<int64_t> g_mountDiagUntilMs;
+
 namespace
 {
 constexpr uint32_t kPlayerFactionId = 0xDB1;
@@ -1026,6 +1029,7 @@ void CharacterService::OnMountEvent(const MountEvent& acEvent) const noexcept
     request.MountId = mountServerId;
     request.MountOwnershipEpoch = mountOwnershipEpoch;
 
+    g_mountDiagUntilMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + 12000;
     m_localTrace = {acEvent.RiderID, acEvent.MountID};
     m_localTraceStart = std::chrono::steady_clock::now();
     m_occupiedMounts[mountServerId] = pRiderLocalComponent->Id;
@@ -1078,6 +1082,7 @@ void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcep
             ShareMountOwnerWithParty(pMount);
     }
 
+    g_mountDiagUntilMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + 12000;
     m_traceMount = {pRider->formID, pMount->formID};
     m_traceStart = std::chrono::steady_clock::now();
     spdlog::info("MountTrace start rider {:X} mount {:X} riderPos ({:.0f},{:.0f},{:.0f}) mountPos ({:.0f},{:.0f},{:.0f})", pRider->formID, pMount->formID, pRider->position.x, pRider->position.y, pRider->position.z, pMount->position.x, pMount->position.y, pMount->position.z);
@@ -1190,7 +1195,7 @@ void CharacterService::RunMountDismountUpdates() noexcept
     {
         static std::chrono::steady_clock::time_point lastLocalTrace;
         const auto traceNow = std::chrono::steady_clock::now();
-        if (traceNow - m_localTraceStart > 3s)
+        if (traceNow - m_localTraceStart > 10s)
             m_localTrace = {};
         else if (traceNow - lastLocalTrace > 100ms)
         {
@@ -1205,8 +1210,8 @@ void CharacterService::RunMountDismountUpdates() noexcept
                 float yawDelta = pRider->rotation.z - yaw;
                 while (yawDelta > 3.14159265f) yawDelta -= 6.2831853f;
                 while (yawDelta < -3.14159265f) yawDelta += 6.2831853f;
-                spdlog::info("MountLocal +{}ms forward {:.0f} right {:.0f} up {:.0f} yawDelta {:.2f}", std::chrono::duration_cast<std::chrono::milliseconds>(traceNow - m_localTraceStart).count(),
-                             dx * std::sin(yaw) + dy * std::cos(yaw), dx * std::cos(yaw) - dy * std::sin(yaw), pRider->position.z - pMount->position.z, yawDelta);
+                spdlog::info("MountLocal +{}ms forward {:.0f} right {:.0f} up {:.0f} yawDelta {:.2f} riderState {:X}/{:X} mountState {:X}/{:X} riderRotXY {:.2f},{:.2f} interaction={}", std::chrono::duration_cast<std::chrono::milliseconds>(traceNow - m_localTraceStart).count(),
+                             dx * std::sin(yaw) + dy * std::cos(yaw), dx * std::cos(yaw) - dy * std::sin(yaw), pRider->position.z - pMount->position.z, yawDelta, pRider->actorState.flags1, pRider->actorState.flags2, pMount->actorState.flags1, pMount->actorState.flags2, pRider->rotation.x, pRider->rotation.y, pMount->extraData.GetByType(ExtraDataType::Interaction) != nullptr);
             }
         }
     }
@@ -1215,7 +1220,7 @@ void CharacterService::RunMountDismountUpdates() noexcept
     {
         static std::chrono::steady_clock::time_point lastTrace;
         const auto traceNow = std::chrono::steady_clock::now();
-        if (traceNow - m_traceStart > 5s)
+        if (traceNow - m_traceStart > 10s)
             m_traceMount = {};
         else if (traceNow - lastTrace > 150ms)
         {
@@ -1223,7 +1228,7 @@ void CharacterService::RunMountDismountUpdates() noexcept
             auto* pRider = Cast<Actor>(TESForm::GetById(m_traceMount.first));
             auto* pMount = Cast<Actor>(TESForm::GetById(m_traceMount.second));
             if (pRider && pMount)
-                spdlog::info("MountTrace +{}ms rider ({:.0f},{:.0f},{:.0f}) mount ({:.0f},{:.0f},{:.0f}) onMount={}", std::chrono::duration_cast<std::chrono::milliseconds>(traceNow - m_traceStart).count(), pRider->position.x, pRider->position.y, pRider->position.z, pMount->position.x, pMount->position.y, pMount->position.z, pRider->extraData.GetByType(ExtraDataType::Interaction) != nullptr);
+                spdlog::info("MountTrace +{}ms rider ({:.0f},{:.0f},{:.0f}) mount ({:.0f},{:.0f},{:.0f}) onMount={} riderYaw {:.2f} mountYaw {:.2f} riderState {:X}/{:X} mountState {:X}/{:X}", std::chrono::duration_cast<std::chrono::milliseconds>(traceNow - m_traceStart).count(), pRider->position.x, pRider->position.y, pRider->position.z, pMount->position.x, pMount->position.y, pMount->position.z, pRider->extraData.GetByType(ExtraDataType::Interaction) != nullptr, pRider->rotation.z, pMount->rotation.z, pRider->actorState.flags1, pRider->actorState.flags2, pMount->actorState.flags1, pMount->actorState.flags2);
         }
     }
 
