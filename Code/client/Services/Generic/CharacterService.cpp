@@ -71,6 +71,11 @@
 
 #include <World.h>
 #include <atomic>
+#include <cstring>
+#include <BSAnimationGraphManager.h>
+#include <Havok/BShkbAnimationGraph.h>
+#include <Havok/hkbBehaviorGraph.h>
+#include <Havok/hkbVariableValueSet.h>
 #include <Games/TES.h>
 
 CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
@@ -307,7 +312,7 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
     RunLocalUpdates();
     RunFactionsUpdates();
     RunRemoteUpdates();
-    SeatRemoteRider();
+    // SeatRemoteRider(); // disabled while the graph variables are measured
     RunExperienceUpdates();
     ApplyCachedWeaponDraws(acUpdateEvent);
     ProcessLeveledConforms();
@@ -965,6 +970,53 @@ extern std::atomic<int64_t> g_mountDiagUntilMs;
 
 namespace
 {
+// DIAGNOSTIC: log every animation graph variable of a rider that changed since the last call
+void LogGraphVarChanges(const char* apTag, Actor* apActor)
+{
+    const auto spManager = apActor->animationGraphHolder.GetAnimationGraphManagerPtr();
+    if (!spManager)
+        return;
+
+    BSAnimationGraphManager* pManager = spManager.get();
+    BSSpinLockGuard _{pManager->lock};
+    if (pManager->animationGraphIndex >= pManager->animationGraphs.size)
+        return;
+
+    const BShkbAnimationGraph* pGraph = apActor->formID == 0x14 ? pManager->animationGraphs.Get(0) : pManager->animationGraphs.Get(pManager->animationGraphIndex);
+    if (!pGraph || !pGraph->behaviorGraph || !pGraph->behaviorGraph->animationVariables)
+        return;
+
+    const auto* pSet = pGraph->behaviorGraph->animationVariables;
+    static std::unordered_map<std::string, std::vector<uint32_t>> s_last;
+    static std::unordered_map<std::string, SortedMap<uint32_t, String>> s_names;
+
+    const std::string key = std::string(apTag) + std::to_string(apActor->formID);
+    auto& last = s_last[key];
+    auto& names = s_names[key];
+    if (last.size() != pSet->size)
+    {
+        names = pManager->DumpAnimationVariables(false);
+        last.assign(pSet->size, 0xFFFFFFFF);
+        spdlog::info("GraphVar {} {:X}: {} variables", apTag, apActor->formID, pSet->size);
+    }
+
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() % 1000000;
+    for (uint32_t i = 0; i < pSet->size; ++i)
+    {
+        const uint32_t v = static_cast<uint32_t>(pSet->data[i]);
+        if (v == last[i])
+            continue;
+        float f;
+        std::memcpy(&f, &v, sizeof f);
+        const auto it = names.find(i);
+        spdlog::info("GraphVar {} {:X} t={} {} (#{}) {:X} -> {:X} (float {:.3f})", apTag, apActor->formID, nowMs, it != names.end() ? it->second.c_str() : "?", i, last[i], v, f);
+        last[i] = v;
+    }
+}
+} // namespace
+
+namespace
+{
 constexpr uint32_t kPlayerFactionId = 0xDB1;
 
 // A mount bought by one player stays owned by its stable's faction on every other client, because the owner is only set by
@@ -1230,6 +1282,9 @@ void CharacterService::RunMountDismountUpdates() noexcept
 
     if (m_localTrace.first)
     {
+        if (auto* pLocalRider = Cast<Actor>(TESForm::GetById(m_localTrace.first)))
+            LogGraphVarChanges("local", pLocalRider);
+
         static std::chrono::steady_clock::time_point lastLocalTrace;
         const auto traceNow = std::chrono::steady_clock::now();
         if (traceNow - m_localTraceStart > 10s)
@@ -1255,6 +1310,8 @@ void CharacterService::RunMountDismountUpdates() noexcept
 
     if (m_traceMount.first)
     {
+        if (auto* pRemoteRider = Cast<Actor>(TESForm::GetById(m_traceMount.first)))
+            LogGraphVarChanges("remote", pRemoteRider);
         static std::chrono::steady_clock::time_point lastTrace;
         const auto traceNow = std::chrono::steady_clock::now();
         if (traceNow - m_traceStart > 10s)
