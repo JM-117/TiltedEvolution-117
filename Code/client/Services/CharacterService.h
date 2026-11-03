@@ -96,6 +96,7 @@ struct CharacterService
 
 private:
     void RunMountDismountUpdates() noexcept;
+    void SeatRemoteRider() noexcept;
     // Mount server id -> rider server id
     mutable std::unordered_map<uint32_t, uint32_t> m_occupiedMounts;
     // DIAGNOSTIC (remove before upstream): form ids of a remote rider and its mount, followed for a few seconds after NotifyMount

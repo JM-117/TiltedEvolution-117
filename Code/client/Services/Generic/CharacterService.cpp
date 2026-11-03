@@ -306,6 +306,7 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
     RunLocalUpdates();
     RunFactionsUpdates();
     RunRemoteUpdates();
+    SeatRemoteRider();
     RunExperienceUpdates();
     ApplyCachedWeaponDraws(acUpdateEvent);
     ProcessLeveledConforms();
@@ -1125,6 +1126,25 @@ bool CharacterService::IsMountOccupiedByOther(const uint32_t aMountFormId, const
 }
 
 // The rider's client is the only one that sees its mount as ridden, so it tells the server when the rider gets off.
+// A remote rider never plays the climb (the engine skips its package), so the snapshots lift it from the ground to the saddle
+// over about a second, flailing in the air. Put it on the saddle at once and let the snapshots take over afterwards.
+void CharacterService::SeatRemoteRider() noexcept
+{
+    constexpr auto cSeatWindow = 1500ms;
+    // Height of a seated rider's root above the horse's root, measured in the MountTrace logs (130 and 131)
+    constexpr float cSeatHeight = 130.f;
+
+    if (!m_traceMount.first || std::chrono::steady_clock::now() - m_traceStart > cSeatWindow)
+        return;
+
+    auto* pRider = Cast<Actor>(TESForm::GetById(m_traceMount.first));
+    auto* pMount = Cast<Actor>(TESForm::GetById(m_traceMount.second));
+    if (!pRider || !pMount)
+        return;
+
+    pRider->ForcePosition(glm::vec3(pMount->position.x, pMount->position.y, pMount->position.z + cSeatHeight));
+}
+
 void CharacterService::RunMountDismountUpdates() noexcept
 {
     if (m_traceMount.first)
