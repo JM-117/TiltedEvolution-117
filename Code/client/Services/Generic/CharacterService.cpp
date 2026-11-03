@@ -1129,10 +1129,15 @@ bool CharacterService::IsMountOccupiedByOther(const uint32_t aMountFormId, const
 
 // The rider's client is the only one that sees its mount as ridden, so it tells the server when the rider gets off.
 // The remote rider plays the climb animation, which lifts it to the saddle by itself, while the snapshots lift it too, so it
-// shot above the horse. While the climb plays, hold it at the horse's feet and let only the animation lift it.
+// shot above the horse. While the climb plays, hold it where a rider always starts and let only the animation move it. A rider
+// starts at the same spot every time: 63 units to the left of the horse, 90 degrees turned (measured from a local rider's
+// MountLocal logs: forward 0, right -63, up 0, yaw +1.5 rad, ending seated at forward 36, up 125, yaw 0).
 void CharacterService::SeatRemoteRider() noexcept
 {
     constexpr auto cSeatWindow = 1500ms;
+    constexpr float cStartRight = -63.f;
+    constexpr float cStartYaw = 1.55f;
+
     if (!m_traceMount.first || std::chrono::steady_clock::now() - m_traceStart > cSeatWindow)
         return;
 
@@ -1141,9 +1146,9 @@ void CharacterService::SeatRemoteRider() noexcept
     if (!pRider || !pMount)
         return;
 
-    pRider->ForcePosition(glm::vec3(pMount->position.x, pMount->position.y, pMount->position.z));
-    // A rider always mounts facing the way the horse faces
-    pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, pMount->rotation.z);
+    const float cYaw = pMount->rotation.z;
+    pRider->ForcePosition(glm::vec3(pMount->position.x + cStartRight * std::cos(cYaw), pMount->position.y - cStartRight * std::sin(cYaw), pMount->position.z));
+    pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, cYaw + cStartYaw);
 }
 
 void CharacterService::RunMountDismountUpdates() noexcept
