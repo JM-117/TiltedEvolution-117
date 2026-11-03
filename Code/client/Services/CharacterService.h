@@ -92,6 +92,8 @@ struct CharacterService
     void ProcessNewEntity(entt::entity aEntity) const noexcept;
 
     // True when someone other than the rider is already riding the mount, as told by the server
+    // The rider half of the mount (enter) or dismount pair animation just started on this remote rider
+    void OnRiderPair(uint32_t aRiderFormId, bool aEnter) noexcept;
     bool IsMountOccupiedByOther(uint32_t aMountFormId, uint32_t aRiderFormId) const noexcept;
 
 private:
@@ -100,6 +102,14 @@ private:
     // Mount server id -> rider server id
     mutable std::unordered_map<uint32_t, uint32_t> m_occupiedMounts;
     // DIAGNOSTIC (remove before upstream): form ids of a remote rider and its mount, followed for a few seconds after NotifyMount
+    struct RiderPair
+    {
+        uint32_t MountId{};
+        bool Enter{};
+        bool Active{};
+        std::chrono::steady_clock::time_point Start{};
+    };
+    std::unordered_map<uint32_t, RiderPair> m_riderPairs; // remote rider form id -> its mount and running pair animation
     mutable std::pair<uint32_t, uint32_t> m_traceMount{};
     mutable std::chrono::steady_clock::time_point m_traceStart{};
     // DIAGNOSTIC: same for the local rider, to measure where a rider stands relative to its mount while climbing on

@@ -307,8 +307,7 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
     RunLocalUpdates();
     RunFactionsUpdates();
     RunRemoteUpdates();
-    // EXPERIMENT: no forced seat, only network positions
-    // SeatRemoteRider();
+    SeatRemoteRider();
     RunExperienceUpdates();
     ApplyCachedWeaponDraws(acUpdateEvent);
     ProcessLeveledConforms();
@@ -1084,6 +1083,7 @@ void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcep
     }
 
     g_mountDiagUntilMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + 12000;
+    m_riderPairs[pRider->formID].MountId = pMount->formID;
     m_traceMount = {pRider->formID, pMount->formID};
     m_traceStart = std::chrono::steady_clock::now();
     spdlog::info("MountTrace start rider {:X} mount {:X} riderPos ({:.0f},{:.0f},{:.0f}) mountPos ({:.0f},{:.0f},{:.0f})", pRider->formID, pMount->formID, pRider->position.x, pRider->position.y, pRider->position.z, pMount->position.x, pMount->position.y, pMount->position.z);
@@ -1138,23 +1138,59 @@ bool CharacterService::IsMountOccupiedByOther(const uint32_t aMountFormId, const
 // shot above the horse. While the climb plays, hold it where a rider always starts and let only the animation move it. A rider
 // starts at the same spot every time: 63 units to the left of the horse, 90 degrees turned (measured from a local rider's
 // MountLocal logs: forward 0, right -63, up 0, yaw +1.5 rad, ending seated at forward 36, up 125, yaw 0).
+void CharacterService::OnRiderPair(uint32_t aRiderFormId, bool aEnter) noexcept
+{
+    const auto it = m_riderPairs.find(aRiderFormId);
+    if (it == m_riderPairs.end())
+        return;
+
+    it->second.Enter = aEnter;
+    it->second.Active = true;
+    it->second.Start = std::chrono::steady_clock::now();
+}
+
 void CharacterService::SeatRemoteRider() noexcept
 {
-    constexpr auto cSeatWindow = 1500ms;
-    constexpr float cStartRight = -63.f;
-    constexpr float cStartYaw = 1.55f;
+    // The pair animation moves the rider's body on its own, so the network position (which already contains that
+    // movement) would add to it. While the animation runs, hold the rider at the pose the animation starts from and
+    // let it do the climb; when it ends the network position is exactly where the animation ends.
+    // Durations and poses are measured from a local rider (forward/right relative to the mount, as in Skyrim yaw).
+    constexpr float cEnterSeconds = 1.1f;
+    constexpr float cExitSeconds = 0.95f;
+    constexpr float cEnterRight = -62.5f;
+    constexpr float cEnterYaw = 1.55f;
+    constexpr float cSeatForward = 18.f;
+    constexpr float cSeatRight = 2.f;
+    constexpr float cSeatUp = 129.f;
 
-    if (!m_traceMount.first || std::chrono::steady_clock::now() - m_traceStart > cSeatWindow)
-        return;
+    const auto now = std::chrono::steady_clock::now();
+    for (auto& [riderId, pair] : m_riderPairs)
+    {
+        if (!pair.Active)
+            continue;
 
-    auto* pRider = Cast<Actor>(TESForm::GetById(m_traceMount.first));
-    auto* pMount = Cast<Actor>(TESForm::GetById(m_traceMount.second));
-    if (!pRider || !pMount)
-        return;
+        const float elapsed = std::chrono::duration<float>(now - pair.Start).count();
+        if (elapsed > (pair.Enter ? cEnterSeconds : cExitSeconds))
+        {
+            pair.Active = false;
+            continue;
+        }
 
-    const float cYaw = pMount->rotation.z;
-    pRider->ForcePosition(glm::vec3(pMount->position.x + cStartRight * std::cos(cYaw), pMount->position.y - cStartRight * std::sin(cYaw), pMount->position.z));
-    pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, cYaw + cStartYaw);
+        auto* pRider = Cast<Actor>(TESForm::GetById(riderId));
+        auto* pMount = Cast<Actor>(TESForm::GetById(pair.MountId));
+        if (!pRider || !pMount)
+        {
+            pair.Active = false;
+            continue;
+        }
+
+        const float yaw = pMount->rotation.z;
+        const float forward = pair.Enter ? 0.f : cSeatForward;
+        const float right = pair.Enter ? cEnterRight : cSeatRight;
+        const float up = pair.Enter ? 0.f : cSeatUp;
+        pRider->ForcePosition(glm::vec3(pMount->position.x + forward * std::sin(yaw) + right * std::cos(yaw), pMount->position.y + forward * std::cos(yaw) - right * std::sin(yaw), pMount->position.z + up));
+        pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, pair.Enter ? yaw + cEnterYaw : yaw);
+    }
 }
 
 void CharacterService::RunMountDismountUpdates() noexcept

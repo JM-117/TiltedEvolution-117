@@ -12,6 +12,7 @@
 #include <Misc/MiddleProcess.h>
 
 #include <Messages/RequestActionEvents.h>
+#include <Services/CharacterService.h>
 extern bool MountDiagActive() noexcept;
 #include <Structs/Movement.h>
 
@@ -63,6 +64,9 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
 
         const bool skipRiderPair = false;
         const auto result = ActorMediator::Get()->ForceAction(&actionData);
+
+        if (result && (first.EventName == "HorseEnter" || first.EventName == "HorseExit"))
+            aWorld.GetCharacterService().OnRiderPair(apActor->formID, first.EventName == "HorseEnter");
 
         if (MountDiagActive() && actionId != 0x46BAF && actionId != 0x13002)
             spdlog::info("MountAction replay on {:X}: action {:X} event '{}' result {} skipped={}", apActor->formID, actionId, first.EventName, result, skipRiderPair);
