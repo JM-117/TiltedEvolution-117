@@ -1153,6 +1153,39 @@ void CharacterService::SeatRemoteRider() noexcept
 
 void CharacterService::RunMountDismountUpdates() noexcept
 {
+    // DIAGNOSTIC: follow the local rider's pose relative to its mount for the whole ride, to measure how it gets off
+    if (!m_occupiedMounts.empty())
+    {
+        static std::chrono::steady_clock::time_point lastRideTrace;
+        const auto rideNow = std::chrono::steady_clock::now();
+        if (rideNow - lastRideTrace > 100ms)
+        {
+            lastRideTrace = rideNow;
+            for (const auto& [mountServerId, riderServerId] : m_occupiedMounts)
+            {
+                const auto cRider = Utils::FindEntityByServerId(riderServerId);
+                const auto cMount = Utils::FindEntityByServerId(mountServerId);
+                if (!cRider || !cMount || !m_world.all_of<LocalComponent>(*cRider))
+                    continue;
+                const auto* pRiderForm = m_world.try_get<FormIdComponent>(*cRider);
+                const auto* pMountForm = m_world.try_get<FormIdComponent>(*cMount);
+                if (!pRiderForm || !pMountForm)
+                    continue;
+                const auto* pRider = Cast<Actor>(TESForm::GetById(pRiderForm->Id));
+                const auto* pMount = Cast<Actor>(TESForm::GetById(pMountForm->Id));
+                if (!pRider || !pMount)
+                    continue;
+                const float dx = pRider->position.x - pMount->position.x;
+                const float dy = pRider->position.y - pMount->position.y;
+                const float yaw = pMount->rotation.z;
+                float yawDelta = pRider->rotation.z - yaw;
+                while (yawDelta > 3.14159265f) yawDelta -= 6.2831853f;
+                while (yawDelta < -3.14159265f) yawDelta += 6.2831853f;
+                spdlog::info("RideLocal forward {:.0f} right {:.0f} up {:.0f} yawDelta {:.2f} ridden={}", dx * std::sin(yaw) + dy * std::cos(yaw), dx * std::cos(yaw) - dy * std::sin(yaw), pRider->position.z - pMount->position.z, yawDelta, pMount->extraData.GetByType(ExtraDataType::Interaction) != nullptr);
+            }
+        }
+    }
+
     if (m_localTrace.first)
     {
         static std::chrono::steady_clock::time_point lastLocalTrace;
