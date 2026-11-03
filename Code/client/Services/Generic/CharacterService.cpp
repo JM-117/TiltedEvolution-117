@@ -20,6 +20,7 @@
 #include <BranchInfo.h>
 #include <Components.h>
 #include <NetImmerse/NiNode.h>
+#include <ModCompat/BehaviorVar.h>
 #include <Misc/BSFixedString.h>
 
 #include <Systems/InterpolationSystem.h>
@@ -2108,7 +2109,11 @@ float NodeHeading(NiAVObject* apNode, int aConvention) noexcept
 // bIsSynced alone: the graph leaves the synced state a few frames before the bone returns to the actor.
 void CancelPairRootMotion(Actor* apActor, const InterpolationComponent& acInterpolation) noexcept
 {
-    NiNode* pRoot = apActor ? apActor->GetNiNode() : nullptr;
+    // Riders only: the horse plays its half of the pair too, and moving it here stops its legs
+    if (!apActor || apActor->GetExtension()->GraphDescriptorHash != BehaviorVar::GetHumanoidHash())
+        return;
+
+    NiNode* pRoot = apActor->GetNiNode();
     if (!pRoot)
         return;
 
