@@ -1196,9 +1196,39 @@ void CharacterService::OnRiderPair(uint32_t aRiderFormId, bool aEnter) noexcept
     if (it == m_riderPairs.end())
         return;
 
+    auto* pRider = Cast<Actor>(TESForm::GetById(aRiderFormId));
+    if (!pRider)
+        return;
+
+    // Freeze the rider on the newest snapshot the owner sent, i.e. where it stood when it fired the animation. The pose being
+    // drawn lags ~100 ms behind (up to 80 units while walking to the horse), so it is not used.
+    it->second.HoldPosition = glm::vec3(pRider->position.x, pRider->position.y, pRider->position.z);
+    it->second.HoldRotation = glm::vec3(pRider->rotation.x, pRider->rotation.y, pRider->rotation.z);
+    auto view = m_world.view<FormIdComponent, InterpolationComponent>();
+    for (auto entity : view)
+    {
+        if (view.get<FormIdComponent>(entity).Id != aRiderFormId)
+            continue;
+        const auto& points = view.get<InterpolationComponent>(entity).TimePoints;
+        if (!points.empty())
+        {
+            it->second.HoldPosition = points.back().Position;
+            it->second.HoldRotation = points.back().Rotation;
+        }
+        break;
+    }
+
     it->second.Enter = aEnter;
     it->second.Active = true;
     it->second.Start = std::chrono::steady_clock::now();
+
+    if (auto* pMount = Cast<Actor>(TESForm::GetById(it->second.MountId)))
+    {
+        const glm::vec3 d = it->second.HoldPosition - glm::vec3(pMount->position.x, pMount->position.y, pMount->position.z);
+        const float yaw = pMount->rotation.z;
+        spdlog::info("RiderHold {:X} {} freeze forward {:.0f} right {:.0f} up {:.0f} yawDelta {:.2f}", aRiderFormId, aEnter ? "enter" : "exit",
+                     d.x * std::sin(yaw) + d.y * std::cos(yaw), d.x * std::cos(yaw) - d.y * std::sin(yaw), d.z, it->second.HoldRotation.z - yaw);
+    }
 }
 
 namespace
@@ -1233,16 +1263,9 @@ int32_t ReadGraphInt(Actor* apActor, const char* apName)
 
 void CharacterService::SeatRemoteRider() noexcept
 {
-    // The pair animation moves the rider's body on its own, so the network position (which already contains that
-    // movement) would add to it. While the animation runs, hold the rider at the pose the animation starts from and
-    // let it do the climb; when it ends the network position is exactly where the animation ends.
-    // Durations and poses are measured from a local rider (forward/right relative to the mount, as in Skyrim yaw).
-    constexpr float cEnterRight = -62.5f;
-    constexpr float cEnterYaw = 1.55f;
-    constexpr float cSeatForward = 18.f;
-    constexpr float cSeatRight = 2.f;
-    constexpr float cSeatUp = 129.f;
-
+    // The pair animation moves the rider's body on its own, while the network position (the owner's rider, moved by the same
+    // animation) would move it a second time. So while the graph is in the synced pair animation, network positions are
+    // walled off and the rider stays on the snapshot it fired the animation from; when the animation ends both agree again.
     const auto now = std::chrono::steady_clock::now();
     for (auto& [riderId, pair] : m_riderPairs)
     {
@@ -1251,28 +1274,24 @@ void CharacterService::SeatRemoteRider() noexcept
 
         const float elapsed = std::chrono::duration<float>(now - pair.Start).count();
         auto* pRider = Cast<Actor>(TESForm::GetById(riderId));
-        auto* pMount = Cast<Actor>(TESForm::GetById(pair.MountId));
-        if (!pRider || !pMount)
+        if (!pRider)
         {
             pair.Active = false;
             continue;
         }
 
-        // The pair animation keeps moving the body until the graph leaves the synced state (bIsSynced 1 -> 0). Measured:
-        // 1.5 s for the climb, but ~2.3 s for the dismount, well after bIsRiding drops; releasing earlier added the
-        // network movement to the animation (rider in the air, or under the floor until the animation ended).
-        if (elapsed > 0.3f && ReadGraphInt(pRider, "bIsSynced") == 0 || elapsed > 3.5f)
+        // Measured: bIsSynced stays 1 for 1.5 s on the climb and ~2.3 s on the dismount, and the animation's offset is gone
+        // the frame it drops to 0. The time is only a safety limit.
+        const int32_t synced = ReadGraphInt(pRider, "bIsSynced");
+        if ((elapsed > 0.3f && synced == 0) || elapsed > 3.5f)
         {
+            spdlog::info("RiderHold {:X} release after {:.0f} ms bIsSynced {}", riderId, elapsed * 1000.f, synced);
             pair.Active = false;
             continue;
         }
 
-        const float yaw = pMount->rotation.z;
-        const float forward = pair.Enter ? 0.f : cSeatForward;
-        const float right = pair.Enter ? cEnterRight : cSeatRight;
-        const float up = pair.Enter ? 0.f : cSeatUp;
-        pRider->ForcePosition(glm::vec3(pMount->position.x + forward * std::sin(yaw) + right * std::cos(yaw), pMount->position.y + forward * std::cos(yaw) - right * std::sin(yaw), pMount->position.z + up));
-        pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, pair.Enter ? yaw + cEnterYaw : yaw);
+        pRider->ForcePosition(pair.HoldPosition);
+        pRider->SetRotation(pair.HoldRotation.x, pair.HoldRotation.y, pair.HoldRotation.z);
     }
 }
 

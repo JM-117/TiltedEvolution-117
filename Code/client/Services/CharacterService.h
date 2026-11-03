@@ -108,6 +108,8 @@ private:
         bool Enter{};
         bool Active{};
         std::chrono::steady_clock::time_point Start{};
+        glm::vec3 HoldPosition{};
+        glm::vec3 HoldRotation{};
     };
     mutable std::unordered_map<uint32_t, RiderPair> m_riderPairs; // remote rider form id -> its mount and running pair animation
     mutable std::pair<uint32_t, uint32_t> m_traceMount{};
