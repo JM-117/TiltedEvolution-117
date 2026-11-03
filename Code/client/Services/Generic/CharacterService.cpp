@@ -1198,6 +1198,7 @@ void CharacterService::OnRiderPair(uint32_t aRiderFormId, bool aEnter) noexcept
 
     it->second.Enter = aEnter;
     it->second.Active = true;
+    it->second.Ending = false;
     it->second.Start = std::chrono::steady_clock::now();
 }
 
@@ -1242,6 +1243,8 @@ void CharacterService::SeatRemoteRider() noexcept
     constexpr float cSeatForward = 18.f;
     constexpr float cSeatRight = 2.f;
     constexpr float cSeatUp = 129.f;
+    constexpr float cEnterFade = 0.25f;
+    constexpr float cExitFade = 1.0f;
 
     const auto now = std::chrono::steady_clock::now();
     for (auto& [riderId, pair] : m_riderPairs)
@@ -1251,17 +1254,28 @@ void CharacterService::SeatRemoteRider() noexcept
 
         const float elapsed = std::chrono::duration<float>(now - pair.Start).count();
         auto* pRider = Cast<Actor>(TESForm::GetById(riderId));
-        // The animation ends when the graph says the rider is seated (iState 0x3C) or no longer riding (measured: same
-        // 1.5 s on both clients); the time is only a safety limit.
-        const bool cDone = pRider && elapsed > 0.3f && (pair.Enter ? ReadGraphInt(pRider, "iState") == 0x3C : ReadGraphInt(pRider, "bIsRiding") == 0);
-        if (cDone || elapsed > 2.5f)
+        auto* pMount = Cast<Actor>(TESForm::GetById(pair.MountId));
+        if (!pRider || !pMount)
         {
             pair.Active = false;
             continue;
         }
 
-        auto* pMount = Cast<Actor>(TESForm::GetById(pair.MountId));
-        if (!pRider || !pMount)
+        // The animation ends when the graph says the rider is seated (iState 0x3C) or no longer riding (measured: same
+        // 1.5 s on both clients); the time is only a safety limit.
+        if (!pair.Ending && elapsed > 0.3f && (pair.Enter ? ReadGraphInt(pRider, "iState") == 0x3C : ReadGraphInt(pRider, "bIsRiding") == 0))
+        {
+            pair.Ending = true;
+            pair.End = now;
+        }
+        if (!pair.Ending && elapsed > 3.5f)
+            pair.Active = false;
+
+        // After the animation ends its pose offset fades out over a moment, so release the hold gradually into the network
+        // position instead of at once (an instant release left the rider in the air / under the floor for that moment).
+        const float fade = pair.Enter ? cEnterFade : cExitFade;
+        const float s = pair.Ending ? std::chrono::duration<float>(now - pair.End).count() / fade : 0.f;
+        if (s >= 1.f)
         {
             pair.Active = false;
             continue;
@@ -1271,8 +1285,10 @@ void CharacterService::SeatRemoteRider() noexcept
         const float forward = pair.Enter ? 0.f : cSeatForward;
         const float right = pair.Enter ? cEnterRight : cSeatRight;
         const float up = pair.Enter ? 0.f : cSeatUp;
-        pRider->ForcePosition(glm::vec3(pMount->position.x + forward * std::sin(yaw) + right * std::cos(yaw), pMount->position.y + forward * std::cos(yaw) - right * std::sin(yaw), pMount->position.z + up));
-        pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, pair.Enter ? yaw + cEnterYaw : yaw);
+        const glm::vec3 held(pMount->position.x + forward * std::sin(yaw) + right * std::cos(yaw), pMount->position.y + forward * std::cos(yaw) - right * std::sin(yaw), pMount->position.z + up);
+        const glm::vec3 net(pRider->position.x, pRider->position.y, pRider->position.z);
+        pRider->ForcePosition(held + (net - held) * s);
+        pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, (pair.Enter && !pair.Ending) ? yaw + cEnterYaw : pRider->rotation.z);
     }
 }
 
