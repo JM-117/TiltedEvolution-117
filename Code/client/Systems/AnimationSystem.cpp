@@ -61,10 +61,8 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
         actionData.idleForm = Cast<TESIdleForm>(TESForm::GetById(first.IdleId));
         actionData.someFlag = ((first.Type & 0x4) != 0) ? 1 : 0;
 
-        // EXPERIMENT: do not play the rider's own mount/dismount pair animation on the remote copy,
-        // to see whether it adds to the network positions (the horse's half is still played)
-        const bool skipRiderPair = first.EventName == "HorseEnter" || first.EventName == "HorseExit";
-        const auto result = skipRiderPair ? false : ActorMediator::Get()->ForceAction(&actionData);
+        const bool skipRiderPair = false;
+        const auto result = ActorMediator::Get()->ForceAction(&actionData);
 
         if (MountDiagActive() && actionId != 0x46BAF && actionId != 0x13002)
             spdlog::info("MountAction replay on {:X}: action {:X} event '{}' result {} skipped={}", apActor->formID, actionId, first.EventName, result, skipRiderPair);

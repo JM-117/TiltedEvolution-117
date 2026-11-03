@@ -55,6 +55,16 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
 
         // spdlog::debug("Action event name: {}, target name: {}", apAction->eventName.AsAscii(), apAction->targetEventName.AsAscii());
 
+        // The rider's mount pair is retried while it walks to the horse and aborted until it is close enough;
+        // replaying the aborted tries starts the animation on the remote copy before the real climb
+        if (apAction->action && apAction->action->formID == 0x13009 && !g_forceAnimation && ((apAction->target && Cast<Actor>(apAction->target) && Cast<Actor>(apAction->target)->IsMount()) || pActor->IsMount()))
+        {
+            if (MountDiagActive())
+                spdlog::info("MountAction result {} for actor {:X} event '{}' target '{}'", res, pActor->formID, apAction->eventName.AsAscii(), apAction->targetEventName.AsAscii());
+            if (!res)
+                return res;
+        }
+
         // This is a weird case where it gets spammed and doesn't do much, not sure if it still needs to be sent over the network
         if (apAction->someFlag == 1 || g_forceAnimation)
             return res;
