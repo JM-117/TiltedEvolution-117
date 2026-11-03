@@ -1143,12 +1143,13 @@ void CharacterService::RunMountDismountUpdates() noexcept
         }
     }
 
-    constexpr auto cPollInterval = 500ms;
-    constexpr auto cDismountDelay = 4000ms;
+    constexpr auto cPollInterval = 250ms;
+    constexpr auto cDismountDelay = 600ms;
+    constexpr auto cClimbTimeout = 6000ms;
     static std::chrono::steady_clock::time_point lastPoll;
     static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> freeSince;
-    static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> ridingSince;
-    static std::unordered_set<uint32_t> sentPairEnd;
+    // Mounts whose rider has been seen on them: only those can be freed quickly, the others are still climbing on
+    static std::unordered_set<uint32_t> wasRidden;
 
     const auto now = std::chrono::steady_clock::now();
     if (m_occupiedMounts.empty() || now - lastPoll < cPollInterval)
@@ -1193,26 +1194,16 @@ void CharacterService::RunMountDismountUpdates() noexcept
         {
             freeSince.erase(mountId);
 
-            // A mount that was remote while the rider climbed on never ran its graph, so it can stay in MountSynced and refuse to
-            // move until something resets it (a neigh did). PairEnd leaves that state and does nothing elsewhere.
-            const auto [seen, firstSeen] = ridingSince.try_emplace(mountId, now);
-            if (!sentPairEnd.contains(mountId) && now - seen->second > 1500ms)
-            {
-                sentPairEnd.insert(mountId);
-                BSFixedString pairEnd("PairEnd");
-                const bool cSent = pMount->SendAnimationEvent(&pairEnd);
-                spdlog::info("Mount {:X}: PairEnd after mounting sent={}", mountId, cSent);
-            }
+            wasRidden.insert(mountId);
             continue;
         }
-        ridingSince.erase(mountId);
-        sentPairEnd.erase(mountId);
 
         const auto [slot, inserted] = freeSince.try_emplace(mountId, now);
-        if (now - slot->second < cDismountDelay)
+        if (now - slot->second < (wasRidden.contains(mountId) ? cDismountDelay : cClimbTimeout))
             continue;
 
         freeSince.erase(mountId);
+        wasRidden.erase(mountId);
         m_occupiedMounts.erase(mountId);
         if (!pMountLocal)
             continue;
