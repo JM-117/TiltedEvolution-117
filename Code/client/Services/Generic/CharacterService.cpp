@@ -312,7 +312,7 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
     RunLocalUpdates();
     RunFactionsUpdates();
     RunRemoteUpdates();
-    // SeatRemoteRider(); // disabled while the graph variables are measured
+    SeatRemoteRider();
     RunExperienceUpdates();
     ApplyCachedWeaponDraws(acUpdateEvent);
     ProcessLeveledConforms();
@@ -1201,14 +1201,42 @@ void CharacterService::OnRiderPair(uint32_t aRiderFormId, bool aEnter) noexcept
     it->second.Start = std::chrono::steady_clock::now();
 }
 
+namespace
+{
+// Reads an int animation graph variable of an actor by name (the index is looked up once per name); -1 when unavailable
+int32_t ReadGraphInt(Actor* apActor, const char* apName)
+{
+    const auto spManager = apActor->animationGraphHolder.GetAnimationGraphManagerPtr();
+    if (!spManager)
+        return -1;
+    BSAnimationGraphManager* pManager = spManager.get();
+    BSSpinLockGuard _{pManager->lock};
+    if (pManager->animationGraphIndex >= pManager->animationGraphs.size)
+        return -1;
+    const BShkbAnimationGraph* pGraph = pManager->animationGraphs.Get(pManager->animationGraphIndex);
+    if (!pGraph || !pGraph->behaviorGraph || !pGraph->behaviorGraph->animationVariables)
+        return -1;
+    const auto* pSet = pGraph->behaviorGraph->animationVariables;
+    static std::unordered_map<std::string, uint32_t> s_index;
+    auto it = s_index.find(apName);
+    if (it == s_index.end())
+    {
+        uint32_t idx = 0xFFFFFFFF;
+        for (const auto& [i, name] : pManager->DumpAnimationVariables(false))
+            if (std::strcmp(name.c_str(), apName) == 0)
+                idx = i;
+        it = s_index.emplace(apName, idx).first;
+    }
+    return it->second < pSet->size ? static_cast<int32_t>(pSet->data[it->second]) : -1;
+}
+} // namespace
+
 void CharacterService::SeatRemoteRider() noexcept
 {
     // The pair animation moves the rider's body on its own, so the network position (which already contains that
     // movement) would add to it. While the animation runs, hold the rider at the pose the animation starts from and
     // let it do the climb; when it ends the network position is exactly where the animation ends.
     // Durations and poses are measured from a local rider (forward/right relative to the mount, as in Skyrim yaw).
-    constexpr float cEnterSeconds = 1.1f;
-    constexpr float cExitSeconds = 0.95f;
     constexpr float cEnterRight = -62.5f;
     constexpr float cEnterYaw = 1.55f;
     constexpr float cSeatForward = 18.f;
@@ -1222,13 +1250,16 @@ void CharacterService::SeatRemoteRider() noexcept
             continue;
 
         const float elapsed = std::chrono::duration<float>(now - pair.Start).count();
-        if (elapsed > (pair.Enter ? cEnterSeconds : cExitSeconds))
+        auto* pRider = Cast<Actor>(TESForm::GetById(riderId));
+        // The animation ends when the graph says the rider is seated (iState 0x3C) or no longer riding (measured: same
+        // 1.5 s on both clients); the time is only a safety limit.
+        const bool cDone = pRider && elapsed > 0.3f && (pair.Enter ? ReadGraphInt(pRider, "iState") == 0x3C : ReadGraphInt(pRider, "bIsRiding") == 0);
+        if (cDone || elapsed > 2.5f)
         {
             pair.Active = false;
             continue;
         }
 
-        auto* pRider = Cast<Actor>(TESForm::GetById(riderId));
         auto* pMount = Cast<Actor>(TESForm::GetById(pair.MountId));
         if (!pRider || !pMount)
         {
