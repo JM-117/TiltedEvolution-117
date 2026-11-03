@@ -102,7 +102,7 @@ static TInitFromPackage* RealInitFromPackage = nullptr;
 void TP_MAKE_THISCALL(HookInitFromPackage, void, TESPackage* apPackage, TESObjectREFR* apTarget, Actor* arActor)
 {
     // Only mounts sync their package (e.g. PlayerHorseStayPut after a dismount); without it the horse keeps wandering on the other client.
-    if (arActor && apPackage && arActor->IsMount() && !s_execInitPackage && arActor->GetExtension()->IsLocal())
+    if (arActor && apPackage && arActor->IsMount() && (apPackage->formID >> 24) != 0xFF && !s_execInitPackage && arActor->GetExtension()->IsLocal())
         World::Get().GetRunner().Trigger(InitPackageEvent(arActor->formID, apPackage->formID));
 
 #if AI_SYNC

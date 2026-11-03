@@ -301,32 +301,7 @@ void CharacterService::OnActorRemoved(const ActorRemovedEvent& acEvent) noexcept
 
 void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
 {
-    // DIAGNOSTIC (remove before upstream): log each mount's control/package changes to find why a dismounted horse wanders.
-    {
-        static std::chrono::steady_clock::time_point lastLog;
-        static std::map<uint32_t, std::string> lastState;
-        const auto now = std::chrono::steady_clock::now();
-        if (now - lastLog > 500ms)
-        {
-            lastLog = now;
-            for (auto entity : m_world.view<FormIdComponent>())
-            {
-                Actor* pActor = Cast<Actor>(TESForm::GetById(m_world.get<FormIdComponent>(entity).Id));
-                if (!pActor || !pActor->IsMount())
-                    continue;
-                const uint32_t pkg = (pActor->currentProcess && pActor->currentProcess->package) ? pActor->currentProcess->package->formID : 0;
-                const char* ctl = m_world.all_of<LocalComponent>(entity) ? "local" : (m_world.all_of<RemoteComponent>(entity) ? "remote" : "none");
-                const auto state = fmt::format("{} pkg={:X} ridden={}", ctl, pkg, pActor->extraData.GetByType(ExtraDataType::Interaction) != nullptr);
-                auto& last = lastState[pActor->formID];
-                if (last != state)
-                {
-                    spdlog::info("MountDiag {:X}: {} (was {})", pActor->formID, state, last.empty() ? "-" : last);
-                    last = state;
-                }
-            }
-        }
-    }
-
+    RunMountDismountUpdates();
     RunSpawnUpdates();
     RunLocalUpdates();
     RunFactionsUpdates();
@@ -1050,11 +1025,20 @@ void CharacterService::OnMountEvent(const MountEvent& acEvent) const noexcept
     request.MountId = mountServerId;
     request.MountOwnershipEpoch = mountOwnershipEpoch;
 
+    m_occupiedMounts[mountServerId] = pRiderLocalComponent->Id;
     m_transport.Send(request);
 }
 
 void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcept
 {
+    if (acMessage.Dismount)
+    {
+        m_occupiedMounts.erase(acMessage.MountId);
+        return;
+    }
+
+    m_occupiedMounts[acMessage.MountId] = acMessage.RiderId;
+
     auto remoteView = m_world.view<RemoteComponent, FormIdComponent>();
 
     const auto riderIt = std::find_if(std::begin(remoteView), std::end(remoteView), [remoteView, Id = acMessage.RiderId](auto entity) { return remoteView.get<RemoteComponent>(entity).Id == Id; });
@@ -1092,6 +1076,122 @@ void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcep
     }
 
     pRider->InitiateMountPackage(pMount);
+}
+
+bool CharacterService::IsMountOccupiedByOther(const uint32_t aMountFormId, const uint32_t aRiderFormId) const noexcept
+{
+    const auto view = m_world.view<FormIdComponent>();
+    const auto findServerId = [&](uint32_t aFormId) -> std::optional<uint32_t>
+    {
+        for (auto entity : view)
+            if (view.get<FormIdComponent>(entity).Id == aFormId)
+                return Utils::GetServerId(entity);
+        return std::nullopt;
+    };
+
+    const auto mountId = findServerId(aMountFormId);
+    if (!mountId)
+        return false;
+
+    const auto it = m_occupiedMounts.find(*mountId);
+    if (it == m_occupiedMounts.end())
+        return false;
+
+    const auto riderId = findServerId(aRiderFormId);
+    if (riderId && *riderId == it->second)
+        return false;
+
+    // The rider left the game or its entity is gone: the mount is free
+    bool riderExists = false;
+    for (auto entity : view)
+    {
+        const auto id = Utils::GetServerId(entity);
+        if (id && *id == it->second)
+        {
+            riderExists = true;
+            break;
+        }
+    }
+    if (!riderExists)
+    {
+        m_occupiedMounts.erase(it);
+        return false;
+    }
+
+    return true;
+}
+
+// The rider's client is the only one that sees its mount as ridden, so it tells the server when the rider gets off.
+void CharacterService::RunMountDismountUpdates() noexcept
+{
+    constexpr auto cPollInterval = 500ms;
+    constexpr auto cDismountDelay = 4000ms;
+    static std::chrono::steady_clock::time_point lastPoll;
+    static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> freeSince;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (m_occupiedMounts.empty() || now - lastPoll < cPollInterval)
+        return;
+    lastPoll = now;
+
+    for (auto it = m_occupiedMounts.begin(); it != m_occupiedMounts.end();)
+    {
+        const uint32_t mountId = it->first;
+        const uint32_t riderId = it->second;
+        ++it;
+
+        bool riderIsLocal = false;
+        const LocalComponent* pRiderLocal = nullptr;
+        for (auto entity : m_world.view<LocalComponent>())
+        {
+            const auto& local = m_world.get<LocalComponent>(entity);
+            if (local.Id == riderId)
+            {
+                riderIsLocal = true;
+                pRiderLocal = &local;
+                break;
+            }
+        }
+        if (!riderIsLocal)
+            continue;
+
+        Actor* pMount = nullptr;
+        const LocalComponent* pMountLocal = nullptr;
+        for (auto entity : m_world.view<LocalComponent, FormIdComponent>())
+        {
+            const auto& local = m_world.get<LocalComponent>(entity);
+            if (local.Id == mountId)
+            {
+                pMountLocal = &local;
+                pMount = Cast<Actor>(TESForm::GetById(m_world.get<FormIdComponent>(entity).Id));
+                break;
+            }
+        }
+
+        if (pMount && pMount->extraData.GetByType(ExtraDataType::Interaction))
+        {
+            freeSince.erase(mountId);
+            continue;
+        }
+
+        const auto [slot, inserted] = freeSince.try_emplace(mountId, now);
+        if (now - slot->second < cDismountDelay)
+            continue;
+
+        freeSince.erase(mountId);
+        m_occupiedMounts.erase(mountId);
+        if (!pMountLocal)
+            continue;
+
+        MountRequest request{};
+        request.RiderId = pRiderLocal->Id;
+        request.RiderOwnershipEpoch = pRiderLocal->OwnershipEpoch;
+        request.MountId = mountId;
+        request.MountOwnershipEpoch = pMountLocal->OwnershipEpoch;
+        request.Dismount = true;
+        m_transport.Send(request);
+        spdlog::info("Mount {:X} freed by rider {:X}", mountId, riderId);
+    }
 }
 
 void CharacterService::OnInitPackageEvent(const InitPackageEvent& acEvent) const noexcept
