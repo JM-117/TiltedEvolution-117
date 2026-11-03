@@ -465,6 +465,16 @@ ExtraContainerChanges::Data* TESObjectREFR::GetContainerChanges() const noexcept
     return TiltedPhoques::ThisCall(s_getContainerChangs, this);
 }
 
+void TESObjectREFR::SetDisplayName(const char* apName) noexcept
+{
+    using ObjectReference = TESObjectREFR;
+
+    PAPYRUS_FUNCTION(bool, ObjectReference, SetDisplayName, BSFixedString*, bool);
+
+    BSFixedString name(apName);
+    s_pSetDisplayName(this, &name, false);
+}
+
 void TESObjectREFR::RemoveAllItems() noexcept
 {
     using ObjectReference = TESObjectREFR;

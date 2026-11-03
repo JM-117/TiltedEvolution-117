@@ -1072,7 +1072,20 @@ void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcep
     {
         const auto& cMembers = m_world.GetPartyService().GetPartyMembers();
         if (std::find(cMembers.begin(), cMembers.end(), pRiderPlayer->Id) != cMembers.end())
+        {
             ShareMountOwnerWithParty(pMount);
+
+            // The buying client's script names the mount "<player>'s Horse"; the other clients never get that name. Without a
+            // custom name here, name it after the party member riding it (vanilla format).
+            const auto& cPlayers = m_world.GetPartyService().GetPlayers();
+            const auto nameIt = cPlayers.find(pRiderPlayer->Id);
+            if (nameIt != cPlayers.end() && !pMount->extraData.GetByType(ExtraDataType::TextDisplayData))
+            {
+                const auto cName = fmt::format("{}'s Horse", nameIt->second);
+                pMount->SetDisplayName(cName.c_str());
+                spdlog::info("Mount {:X}: named \"{}\"", pMount->formID, cName);
+            }
+        }
     }
 
     pRider->InitiateMountPackage(pMount);
