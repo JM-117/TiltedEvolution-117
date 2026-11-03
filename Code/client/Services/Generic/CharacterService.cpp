@@ -1140,6 +1140,8 @@ void CharacterService::SeatRemoteRider() noexcept
         return;
 
     pRider->ForcePosition(glm::vec3(pMount->position.x, pMount->position.y, pMount->position.z));
+    // A rider always mounts facing the way the horse faces
+    pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, pMount->rotation.z);
 }
 
 void CharacterService::RunMountDismountUpdates() noexcept
