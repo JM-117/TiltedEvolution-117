@@ -2355,7 +2355,7 @@ float NodeHeading(NiAVObject* apNode, int aConvention) noexcept
 // the engine moves and turns the actor along and the bone stays on it, so the network position and heading already contain
 // that motion. Remote actors skip that engine update, so it was applied a second time (rider in the air and turned 90 degrees
 // while climbing). Measured each frame from the bone itself, so it follows any mount, angle or timing. Not gated on
-// bIsSynced: the graph leaves the synced state a few frames before the bone returns to the actor.
+// bIsSynced alone: the graph leaves the synced state a few frames before the bone returns to the actor.
 void CancelPairRootMotion(Actor* apActor, const InterpolationComponent& acInterpolation) noexcept
 {
     NiNode* pRoot = apActor ? apActor->GetNiNode() : nullptr;
@@ -2387,7 +2387,16 @@ void CancelPairRootMotion(Actor* apActor, const InterpolationComponent& acInterp
     }
 
     const float extraYaw = s_convention ? WrapPi(NodeHeading(pBone, s_convention) - NodeHeading(pRoot, s_convention)) : 0.f;
-    if (glm::length(offset) < 2.f && std::abs(extraYaw) < 0.02f)
+    const bool cBoneHome = glm::length(offset) < 2.f && std::abs(extraYaw) < 0.02f;
+
+    // Only paired animations: walking turns and idles also turn the bone a little and must be left alone. A pair starts with
+    // bIsSynced and ends when the bone is back on the actor, a few frames after bIsSynced drops.
+    static std::unordered_set<uint32_t> s_inPair;
+    if (ReadGraphInt(apActor, "bIsSynced") == 1)
+        s_inPair.insert(apActor->formID);
+    else if (cBoneHome)
+        s_inPair.erase(apActor->formID);
+    if (cBoneHome || !s_inPair.contains(apActor->formID))
         return;
 
     // Turn the actor back by the bone's extra turn, and turn the bone's offset with it, so the body lands on the network pose.
