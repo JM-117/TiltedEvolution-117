@@ -98,6 +98,9 @@ private:
     void RunMountDismountUpdates() noexcept;
     // Mount server id -> rider server id
     mutable std::unordered_map<uint32_t, uint32_t> m_occupiedMounts;
+    // DIAGNOSTIC (remove before upstream): form ids of a remote rider and its mount, followed for a few seconds after NotifyMount
+    mutable std::pair<uint32_t, uint32_t> m_traceMount{};
+    mutable std::chrono::steady_clock::time_point m_traceStart{};
 
     void MoveActor(const Actor* apActor, const GameId& acWorldSpaceId, const GameId& acCellId, const Vector3_NetQuantize& acPosition) const noexcept;
 

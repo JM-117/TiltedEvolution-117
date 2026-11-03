@@ -1075,6 +1075,9 @@ void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcep
             ShareMountOwnerWithParty(pMount);
     }
 
+    m_traceMount = {pRider->formID, pMount->formID};
+    m_traceStart = std::chrono::steady_clock::now();
+    spdlog::info("MountTrace start rider {:X} mount {:X} riderPos ({:.0f},{:.0f},{:.0f}) mountPos ({:.0f},{:.0f},{:.0f})", pRider->formID, pMount->formID, pRider->position.x, pRider->position.y, pRider->position.z, pMount->position.x, pMount->position.y, pMount->position.z);
     pRider->InitiateMountPackage(pMount);
 }
 
@@ -1124,6 +1127,22 @@ bool CharacterService::IsMountOccupiedByOther(const uint32_t aMountFormId, const
 // The rider's client is the only one that sees its mount as ridden, so it tells the server when the rider gets off.
 void CharacterService::RunMountDismountUpdates() noexcept
 {
+    if (m_traceMount.first)
+    {
+        static std::chrono::steady_clock::time_point lastTrace;
+        const auto traceNow = std::chrono::steady_clock::now();
+        if (traceNow - m_traceStart > 5s)
+            m_traceMount = {};
+        else if (traceNow - lastTrace > 150ms)
+        {
+            lastTrace = traceNow;
+            auto* pRider = Cast<Actor>(TESForm::GetById(m_traceMount.first));
+            auto* pMount = Cast<Actor>(TESForm::GetById(m_traceMount.second));
+            if (pRider && pMount)
+                spdlog::info("MountTrace +{}ms rider ({:.0f},{:.0f},{:.0f}) mount ({:.0f},{:.0f},{:.0f}) onMount={}", std::chrono::duration_cast<std::chrono::milliseconds>(traceNow - m_traceStart).count(), pRider->position.x, pRider->position.y, pRider->position.z, pMount->position.x, pMount->position.y, pMount->position.z, pRider->extraData.GetByType(ExtraDataType::Interaction) != nullptr);
+        }
+    }
+
     constexpr auto cPollInterval = 500ms;
     constexpr auto cDismountDelay = 4000ms;
     static std::chrono::steady_clock::time_point lastPoll;
