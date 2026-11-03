@@ -109,7 +109,7 @@ private:
         bool Active{};
         std::chrono::steady_clock::time_point Start{};
     };
-    std::unordered_map<uint32_t, RiderPair> m_riderPairs; // remote rider form id -> its mount and running pair animation
+    mutable std::unordered_map<uint32_t, RiderPair> m_riderPairs; // remote rider form id -> its mount and running pair animation
     mutable std::pair<uint32_t, uint32_t> m_traceMount{};
     mutable std::chrono::steady_clock::time_point m_traceStart{};
     // DIAGNOSTIC: same for the local rider, to measure where a rider stands relative to its mount while climbing on
