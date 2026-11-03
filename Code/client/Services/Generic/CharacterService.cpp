@@ -2333,6 +2333,31 @@ void CharacterService::RunLocalUpdates() const noexcept
         m_transport.Send(movementMessage, TiltedPhoques::kUnreliableNoNagle);
 }
 
+namespace
+{
+// A paired animation (mounting a horse) moves the skeleton's root bone away from the actor. On the owner's client the engine
+// moves the actor along and the bone stays on it, so the network position already contains that movement. Remote actors
+// skip that engine update, so the bone offset was added a second time (rider in the air until the animation ended).
+// Measured each frame from the bone itself, so it follows any mount, angle or timing.
+void CancelPairRootMotion(Actor* apActor, const InterpolationComponent& acInterpolation) noexcept
+{
+    NiNode* pRoot = apActor ? apActor->GetNiNode() : nullptr;
+    if (!pRoot)
+        return;
+
+    static BSFixedString s_npcRoot("NPC Root [Root]");
+    glm::vec3 root{}, npcRoot{};
+    if (!ReadNodeWorld(pRoot, root) || !ReadNodeWorld(pRoot->GetByName(s_npcRoot), npcRoot))
+        return;
+
+    const glm::vec3 offset = npcRoot - root;
+    if (glm::length(offset) < 2.f || glm::length(offset) > 500.f || ReadGraphInt(apActor, "bIsSynced") != 1)
+        return;
+
+    apActor->ForcePosition(acInterpolation.Position - offset);
+}
+} // namespace
+
 void CharacterService::RunRemoteUpdates() noexcept
 {
     // Each remote actor is played back on its owner's timeline, only as far behind as its snapshots need, see PlaybackClock.
@@ -2355,6 +2380,7 @@ void CharacterService::RunRemoteUpdates() noexcept
         }
 
         InterpolationSystem::Update(pActor, interpolationComponent, cNow);
+        CancelPairRootMotion(pActor, interpolationComponent);
     }
 
     auto animatedView = m_world.view<RemoteComponent, RemoteAnimationComponent, InterpolationComponent, FormIdComponent>();
