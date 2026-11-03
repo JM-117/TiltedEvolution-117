@@ -14,7 +14,6 @@
 #include <ExtraData/ExtraOwnership.h>
 #include <AI/AIProcess.h>
 #include <Forms/TESPackage.h>
-#include <map>
 #include <Interface/UI.h>
 #include <Forms/TESQuest.h>
 
@@ -72,7 +71,6 @@
 #include <Messages/NotifyActorTeleport.h>
 
 #include <World.h>
-#include <atomic>
 #include <cstring>
 #include <BSAnimationGraphManager.h>
 #include <Havok/BShkbAnimationGraph.h>
@@ -314,7 +312,6 @@ void CharacterService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
     RunLocalUpdates();
     RunFactionsUpdates();
     RunRemoteUpdates();
-    // SeatRemoteRider(); // disabled: measuring where the body really is
     RunExperienceUpdates();
     ApplyCachedWeaponDraws(acUpdateEvent);
     ProcessLeveledConforms();
@@ -968,55 +965,6 @@ void CharacterService::OnBeastFormChange(const BeastFormChangeEvent& acEvent) co
     m_transport.Send(request);
 }
 
-extern std::atomic<int64_t> g_mountDiagUntilMs;
-
-namespace
-{
-// DIAGNOSTIC: log every animation graph variable of a rider that changed since the last call
-void LogGraphVarChanges(const char* apTag, Actor* apActor)
-{
-    const auto spManager = apActor->animationGraphHolder.GetAnimationGraphManagerPtr();
-    if (!spManager)
-        return;
-
-    BSAnimationGraphManager* pManager = spManager.get();
-    BSSpinLockGuard _{pManager->lock};
-    if (pManager->animationGraphIndex >= pManager->animationGraphs.size)
-        return;
-
-    const BShkbAnimationGraph* pGraph = apActor->formID == 0x14 ? pManager->animationGraphs.Get(0) : pManager->animationGraphs.Get(pManager->animationGraphIndex);
-    if (!pGraph || !pGraph->behaviorGraph || !pGraph->behaviorGraph->animationVariables)
-        return;
-
-    const auto* pSet = pGraph->behaviorGraph->animationVariables;
-    static std::unordered_map<std::string, std::vector<uint32_t>> s_last;
-    static std::unordered_map<std::string, SortedMap<uint32_t, String>> s_names;
-
-    const std::string key = std::string(apTag) + std::to_string(apActor->formID);
-    auto& last = s_last[key];
-    auto& names = s_names[key];
-    if (last.size() != pSet->size)
-    {
-        names = pManager->DumpAnimationVariables(false);
-        last.assign(pSet->size, 0xFFFFFFFF);
-        spdlog::info("GraphVar {} {:X}: {} variables", apTag, apActor->formID, pSet->size);
-    }
-
-    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() % 1000000;
-    for (uint32_t i = 0; i < pSet->size; ++i)
-    {
-        const uint32_t v = static_cast<uint32_t>(pSet->data[i]);
-        if (v == last[i])
-            continue;
-        float f;
-        std::memcpy(&f, &v, sizeof f);
-        const auto it = names.find(i);
-        spdlog::info("GraphVar {} {:X} t={} {} (#{}) {:X} -> {:X} (float {:.3f})", apTag, apActor->formID, nowMs, it != names.end() ? it->second.c_str() : "?", i, last[i], v, f);
-        last[i] = v;
-    }
-}
-} // namespace
-
 namespace
 {
 constexpr uint32_t kPlayerFactionId = 0xDB1;
@@ -1083,9 +1031,6 @@ void CharacterService::OnMountEvent(const MountEvent& acEvent) const noexcept
     request.MountId = mountServerId;
     request.MountOwnershipEpoch = mountOwnershipEpoch;
 
-    g_mountDiagUntilMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + 12000;
-    m_localTrace = {acEvent.RiderID, acEvent.MountID};
-    m_localTraceStart = std::chrono::steady_clock::now();
     m_occupiedMounts[mountServerId] = pRiderLocalComponent->Id;
     m_transport.Send(request);
 }
@@ -1136,11 +1081,6 @@ void CharacterService::OnNotifyMount(const NotifyMount& acMessage) const noexcep
             ShareMountOwnerWithParty(pMount);
     }
 
-    g_mountDiagUntilMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + 12000;
-    m_riderPairs[pRider->formID].MountId = pMount->formID;
-    m_traceMount = {pRider->formID, pMount->formID};
-    m_traceStart = std::chrono::steady_clock::now();
-    spdlog::info("MountTrace start rider {:X} mount {:X} riderPos ({:.0f},{:.0f},{:.0f}) mountPos ({:.0f},{:.0f},{:.0f})", pRider->formID, pMount->formID, pRider->position.x, pRider->position.y, pRider->position.z, pMount->position.x, pMount->position.y, pMount->position.z);
     pRider->InitiateMountPackage(pMount);
 }
 
@@ -1187,55 +1127,9 @@ bool CharacterService::IsMountOccupiedByOther(const uint32_t aMountFormId, const
     return true;
 }
 
-// The rider's client is the only one that sees its mount as ridden, so it tells the server when the rider gets off.
-// The remote rider plays the climb animation, which lifts it to the saddle by itself, while the snapshots lift it too, so it
-// shot above the horse. While the climb plays, hold it where a rider always starts and let only the animation move it. A rider
-// starts at the same spot every time: 63 units to the left of the horse, 90 degrees turned (measured from a local rider's
-// MountLocal logs: forward 0, right -63, up 0, yaw +1.5 rad, ending seated at forward 36, up 125, yaw 0).
-void CharacterService::OnRiderPair(uint32_t aRiderFormId, bool aEnter) noexcept
-{
-    const auto it = m_riderPairs.find(aRiderFormId);
-    if (it == m_riderPairs.end())
-        return;
-
-    auto* pRider = Cast<Actor>(TESForm::GetById(aRiderFormId));
-    if (!pRider)
-        return;
-
-    // Freeze the rider on the newest snapshot the owner sent, i.e. where it stood when it fired the animation. The pose being
-    // drawn lags ~100 ms behind (up to 80 units while walking to the horse), so it is not used.
-    it->second.HoldPosition = glm::vec3(pRider->position.x, pRider->position.y, pRider->position.z);
-    it->second.HoldRotation = glm::vec3(pRider->rotation.x, pRider->rotation.y, pRider->rotation.z);
-    auto view = m_world.view<FormIdComponent, InterpolationComponent>();
-    for (auto entity : view)
-    {
-        if (view.get<FormIdComponent>(entity).Id != aRiderFormId)
-            continue;
-        const auto& points = view.get<InterpolationComponent>(entity).TimePoints;
-        if (!points.empty())
-        {
-            it->second.HoldPosition = points.back().Position;
-            it->second.HoldRotation = points.back().Rotation;
-        }
-        break;
-    }
-
-    it->second.Enter = aEnter;
-    it->second.Active = true;
-    it->second.Start = std::chrono::steady_clock::now();
-
-    if (auto* pMount = Cast<Actor>(TESForm::GetById(it->second.MountId)))
-    {
-        const glm::vec3 d = it->second.HoldPosition - glm::vec3(pMount->position.x, pMount->position.y, pMount->position.z);
-        const float yaw = pMount->rotation.z;
-        spdlog::info("RiderHold {:X} {} freeze forward {:.0f} right {:.0f} up {:.0f} yawDelta {:.2f}", aRiderFormId, aEnter ? "enter" : "exit",
-                     d.x * std::sin(yaw) + d.y * std::cos(yaw), d.x * std::cos(yaw) - d.y * std::sin(yaw), d.z, it->second.HoldRotation.z - yaw);
-    }
-}
-
 namespace
 {
-// Reads an int animation graph variable of an actor by name (the index is looked up once per name); -1 when unavailable
+// Reads an int animation graph variable of an actor by name (the index is looked up once per graph type); -1 when unavailable
 int32_t ReadGraphInt(Actor* apActor, const char* apName)
 {
     const auto spManager = apActor->animationGraphHolder.GetAnimationGraphManagerPtr();
@@ -1249,58 +1143,22 @@ int32_t ReadGraphInt(Actor* apActor, const char* apName)
     if (!pGraph || !pGraph->behaviorGraph || !pGraph->behaviorGraph->animationVariables)
         return -1;
     const auto* pSet = pGraph->behaviorGraph->animationVariables;
+    // Variable indices differ between graphs (humanoid, horse...), so they are cached per graph descriptor
     static std::unordered_map<std::string, uint32_t> s_index;
-    auto it = s_index.find(apName);
+    const std::string cKey = std::string(apName) + '#' + std::to_string(apActor->GetExtension()->GraphDescriptorHash);
+    auto it = s_index.find(cKey);
     if (it == s_index.end())
     {
         uint32_t idx = 0xFFFFFFFF;
         for (const auto& [i, name] : pManager->DumpAnimationVariables(false))
             if (std::strcmp(name.c_str(), apName) == 0)
                 idx = i;
-        it = s_index.emplace(apName, idx).first;
+        it = s_index.emplace(cKey, idx).first;
     }
     return it->second < pSet->size ? static_cast<int32_t>(pSet->data[it->second]) : -1;
 }
-} // namespace
 
-void CharacterService::SeatRemoteRider() noexcept
-{
-    // The pair animation moves the rider's body on its own, while the network position (the owner's rider, moved by the same
-    // animation) would move it a second time. So while the graph is in the synced pair animation, network positions are
-    // walled off and the rider stays on the snapshot it fired the animation from; when the animation ends both agree again.
-    const auto now = std::chrono::steady_clock::now();
-    for (auto& [riderId, pair] : m_riderPairs)
-    {
-        if (!pair.Active)
-            continue;
-
-        const float elapsed = std::chrono::duration<float>(now - pair.Start).count();
-        auto* pRider = Cast<Actor>(TESForm::GetById(riderId));
-        if (!pRider)
-        {
-            pair.Active = false;
-            continue;
-        }
-
-        // Measured: bIsSynced stays 1 for 1.5 s on the climb and ~2.3 s on the dismount, and the animation's offset is gone
-        // the frame it drops to 0. The time is only a safety limit.
-        const int32_t synced = ReadGraphInt(pRider, "bIsSynced");
-        if ((elapsed > 0.3f && synced == 0) || elapsed > 3.5f)
-        {
-            spdlog::info("RiderHold {:X} release after {:.0f} ms bIsSynced {}", riderId, elapsed * 1000.f, synced);
-            pair.Active = false;
-            continue;
-        }
-
-        pRider->ForcePosition(pair.HoldPosition);
-        pRider->SetRotation(pair.HoldRotation.x, pair.HoldRotation.y, pair.HoldRotation.z);
-    }
-}
-
-namespace
-{
-// DIAGNOSTIC: where the body is really drawn. World translate of a NiAVObject is at 0xA0 (world NiTransform at 0x7C,
-// translate at +0x24, layout from CommonLibSSE-NG); bones are looked up by name.
+// World translate of a NiAVObject is at 0xA0 (world NiTransform at 0x7C, translate at +0x24, layout from CommonLibSSE-NG)
 bool ReadNodeWorld(NiAVObject* apNode, glm::vec3& aOut) noexcept
 {
     if (!apNode)
@@ -1309,119 +1167,11 @@ bool ReadNodeWorld(NiAVObject* apNode, glm::vec3& aOut) noexcept
     aOut = glm::vec3(f[0], f[1], f[2]);
     return true;
 }
-
-void LogBody(Actor* apActor) noexcept
-{
-    NiNode* pRoot = apActor ? apActor->GetNiNode() : nullptr;
-    if (!pRoot)
-        return;
-
-    static BSFixedString s_npcRoot("NPC Root [Root]");
-    static BSFixedString s_pelvis("NPC Pelvis [Pelv]");
-    const glm::vec3 ref(apActor->position.x, apActor->position.y, apActor->position.z);
-    glm::vec3 root{}, npcRoot{}, pelvis{};
-    ReadNodeWorld(pRoot, root);
-    const bool hasNpcRoot = ReadNodeWorld(pRoot->GetByName(s_npcRoot), npcRoot);
-    const bool hasPelvis = ReadNodeWorld(pRoot->GetByName(s_pelvis), pelvis);
-    root -= ref;
-    npcRoot -= ref;
-    pelvis -= ref;
-    spdlog::info("Body {:X} ref ({:.0f},{:.0f},{:.0f}) yaw {:.2f} root ({:.0f},{:.0f},{:.0f}) npcRoot{} ({:.0f},{:.0f},{:.0f}) pelvis{} ({:.0f},{:.0f},{:.0f})",
-                 apActor->formID, ref.x, ref.y, ref.z, apActor->rotation.z, root.x, root.y, root.z, hasNpcRoot ? "" : "?", npcRoot.x, npcRoot.y,
-                 npcRoot.z, hasPelvis ? "" : "?", pelvis.x, pelvis.y, pelvis.z);
-}
 } // namespace
 
+// The rider's client is the only one that sees its mount as ridden, so it tells the server when the rider gets off.
 void CharacterService::RunMountDismountUpdates() noexcept
 {
-    // DIAGNOSTIC: body of every player (local and remote) every 50 ms
-    {
-        static std::chrono::steady_clock::time_point lastBody;
-        const auto bodyNow = std::chrono::steady_clock::now();
-        if (bodyNow - lastBody > 50ms)
-        {
-            lastBody = bodyNow;
-            LogBody(PlayerCharacter::Get());
-            auto players = m_world.view<PlayerComponent, FormIdComponent>();
-            for (auto entity : players)
-                LogBody(Cast<Actor>(TESForm::GetById(players.get<FormIdComponent>(entity).Id)));
-        }
-    }
-
-    // DIAGNOSTIC: follow the local rider's pose relative to its mount for the whole ride, to measure how it gets off
-    if (!m_occupiedMounts.empty())
-    {
-        static std::chrono::steady_clock::time_point lastRideTrace;
-        const auto rideNow = std::chrono::steady_clock::now();
-        if (rideNow - lastRideTrace > 100ms)
-        {
-            lastRideTrace = rideNow;
-            for (const auto& [mountServerId, riderServerId] : m_occupiedMounts)
-            {
-                const auto cRider = Utils::FindEntityByServerId(riderServerId);
-                const auto cMount = Utils::FindEntityByServerId(mountServerId);
-                if (!cRider || !cMount || !m_world.all_of<LocalComponent>(*cRider))
-                    continue;
-                const auto* pRiderForm = m_world.try_get<FormIdComponent>(*cRider);
-                const auto* pMountForm = m_world.try_get<FormIdComponent>(*cMount);
-                if (!pRiderForm || !pMountForm)
-                    continue;
-                const auto* pRider = Cast<Actor>(TESForm::GetById(pRiderForm->Id));
-                const auto* pMount = Cast<Actor>(TESForm::GetById(pMountForm->Id));
-                if (!pRider || !pMount)
-                    continue;
-                const float dx = pRider->position.x - pMount->position.x;
-                const float dy = pRider->position.y - pMount->position.y;
-                const float yaw = pMount->rotation.z;
-                float yawDelta = pRider->rotation.z - yaw;
-                while (yawDelta > 3.14159265f) yawDelta -= 6.2831853f;
-                while (yawDelta < -3.14159265f) yawDelta += 6.2831853f;
-                spdlog::info("RideLocal forward {:.0f} right {:.0f} up {:.0f} yawDelta {:.2f} ridden={}", dx * std::sin(yaw) + dy * std::cos(yaw), dx * std::cos(yaw) - dy * std::sin(yaw), pRider->position.z - pMount->position.z, yawDelta, pMount->extraData.GetByType(ExtraDataType::Interaction) != nullptr);
-            }
-        }
-    }
-
-    if (m_localTrace.first)
-    {
-        static std::chrono::steady_clock::time_point lastLocalTrace;
-        const auto traceNow = std::chrono::steady_clock::now();
-        if (traceNow - m_localTraceStart > 10s)
-            m_localTrace = {};
-        else if (traceNow - lastLocalTrace > 100ms)
-        {
-            lastLocalTrace = traceNow;
-            const auto* pRider = Cast<Actor>(TESForm::GetById(m_localTrace.first));
-            const auto* pMount = Cast<Actor>(TESForm::GetById(m_localTrace.second));
-            if (pRider && pMount)
-            {
-                const float dx = pRider->position.x - pMount->position.x;
-                const float dy = pRider->position.y - pMount->position.y;
-                const float yaw = pMount->rotation.z;
-                float yawDelta = pRider->rotation.z - yaw;
-                while (yawDelta > 3.14159265f) yawDelta -= 6.2831853f;
-                while (yawDelta < -3.14159265f) yawDelta += 6.2831853f;
-                spdlog::info("MountLocal +{}ms forward {:.0f} right {:.0f} up {:.0f} yawDelta {:.2f} riderState {:X}/{:X} mountState {:X}/{:X} riderRotXY {:.2f},{:.2f} interaction={}", std::chrono::duration_cast<std::chrono::milliseconds>(traceNow - m_localTraceStart).count(),
-                             dx * std::sin(yaw) + dy * std::cos(yaw), dx * std::cos(yaw) - dy * std::sin(yaw), pRider->position.z - pMount->position.z, yawDelta, pRider->actorState.flags1, pRider->actorState.flags2, pMount->actorState.flags1, pMount->actorState.flags2, pRider->rotation.x, pRider->rotation.y, pMount->extraData.GetByType(ExtraDataType::Interaction) != nullptr);
-            }
-        }
-    }
-
-    if (m_traceMount.first)
-    {
-        static std::chrono::steady_clock::time_point lastTrace;
-        const auto traceNow = std::chrono::steady_clock::now();
-        if (traceNow - m_traceStart > 10s)
-            m_traceMount = {};
-        else if (traceNow - lastTrace > 150ms)
-        {
-            lastTrace = traceNow;
-            auto* pRider = Cast<Actor>(TESForm::GetById(m_traceMount.first));
-            auto* pMount = Cast<Actor>(TESForm::GetById(m_traceMount.second));
-            if (pRider && pMount)
-                spdlog::info("MountTrace +{}ms rider ({:.0f},{:.0f},{:.0f}) mount ({:.0f},{:.0f},{:.0f}) onMount={} riderYaw {:.2f} mountYaw {:.2f} riderState {:X}/{:X} mountState {:X}/{:X}", std::chrono::duration_cast<std::chrono::milliseconds>(traceNow - m_traceStart).count(), pRider->position.x, pRider->position.y, pRider->position.z, pMount->position.x, pMount->position.y, pMount->position.z, pRider->extraData.GetByType(ExtraDataType::Interaction) != nullptr, pRider->rotation.z, pMount->rotation.z, pRider->actorState.flags1, pRider->actorState.flags2, pMount->actorState.flags1, pMount->actorState.flags2);
-        }
-    }
-
     constexpr auto cPollInterval = 250ms;
     constexpr auto cDismountDelay = 600ms;
     constexpr auto cClimbTimeout = 6000ms;
@@ -2406,16 +2156,6 @@ void CancelPairRootMotion(Actor* apActor, const InterpolationComponent& acInterp
     const glm::vec3 turned(offset.x * std::cos(d) + offset.y * std::sin(d), -offset.x * std::sin(d) + offset.y * std::cos(d), offset.z);
     apActor->ForcePosition(acInterpolation.Position - turned);
     apActor->SetRotation(apActor->rotation.x, apActor->rotation.y, yaw);
-
-    // DIAGNOSTIC
-    static std::chrono::steady_clock::time_point s_lastLog;
-    const auto now = std::chrono::steady_clock::now();
-    if (now - s_lastLog > 50ms)
-    {
-        s_lastLog = now;
-        spdlog::info("PairRoot {:X} offset ({:.0f},{:.0f},{:.0f}) extraYaw {:.2f} netYaw {:.2f} yaw {:.2f}", apActor->formID, offset.x, offset.y, offset.z, extraYaw,
-                     acInterpolation.Yaw, yaw);
-    }
 }
 } // namespace
 

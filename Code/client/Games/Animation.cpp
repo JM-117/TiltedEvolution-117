@@ -13,20 +13,12 @@
 #include <Misc/BSFixedString.h>
 
 #include <World.h>
-#include <atomic>
 
 TP_THIS_FUNCTION(TPerformAction, uint8_t, ActorMediator, TESActionData* apAction);
 static TPerformAction* RealPerformAction;
 
 // TODO: make scoped override
 thread_local bool g_forceAnimation = false;
-
-// DIAGNOSTIC: set by CharacterService around a mount; while open, every action is logged
-std::atomic<int64_t> g_mountDiagUntilMs{0};
-bool MountDiagActive() noexcept
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() < g_mountDiagUntilMs.load();
-}
 
 static bool IsMountRef(TESObjectREFR* apRef) noexcept
 {
@@ -38,11 +30,6 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
 {
     auto pActor = apAction->actor;
     const auto pExtension = pActor->GetExtension();
-
-    if (MountDiagActive() && apAction->action && apAction->action->formID != 0x46BAF && apAction->action->formID != 0x13002)
-        spdlog::info("MountAction actor {:X} local={} forced={} action {:X} event '{}' target '{}' idle {:X} type {} flag {} state {:X}/{:X}", pActor->formID, pExtension->IsLocal(), g_forceAnimation,
-                     apAction->action ? apAction->action->formID : 0, apAction->eventName.AsAscii(), apAction->targetEventName.AsAscii(), apAction->idleForm ? apAction->idleForm->formID : 0,
-                     apAction->unkInput, apAction->someFlag, pActor->actorState.flags1, pActor->actorState.flags2);
 
     if (!pExtension->IsRemote() || g_forceAnimation)
     {
@@ -63,13 +50,8 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
 
         // The rider's mount pair is retried while it walks to the horse and aborted until it is close enough;
         // replaying the aborted tries starts the animation on the remote copy before the real climb
-        if (apAction->action && apAction->action->formID == 0x13009 && !g_forceAnimation && (pActor->IsMount() || IsMountRef(*apAction->target)))
-        {
-            if (MountDiagActive())
-                spdlog::info("MountAction result {} for actor {:X} event '{}' target '{}'", res, pActor->formID, apAction->eventName.AsAscii(), apAction->targetEventName.AsAscii());
-            if (!res)
-                return res;
-        }
+        if (!res && apAction->action && apAction->action->formID == 0x13009 && !g_forceAnimation && (pActor->IsMount() || IsMountRef(*apAction->target)))
+            return res;
 
         // This is a weird case where it gets spammed and doesn't do much, not sure if it still needs to be sent over the network
         if (apAction->someFlag == 1 || g_forceAnimation)
