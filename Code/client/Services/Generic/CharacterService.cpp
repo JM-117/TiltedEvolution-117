@@ -1134,17 +1134,11 @@ bool CharacterService::IsMountOccupiedByOther(const uint32_t aMountFormId, const
 // MountLocal logs: forward 0, right -63, up 0, yaw +1.5 rad, ending seated at forward 36, up 125, yaw 0).
 void CharacterService::SeatRemoteRider() noexcept
 {
-    // The climb animation does not run on the remote copy, so the network snapshots carry the position
-    // (they match a local rider) but not the turn: a local rider starts 1.55 rad off the mount and
-    // straightens out while climbing (measured, about 1.1 s).
+    constexpr auto cSeatWindow = 1500ms;
+    constexpr float cStartRight = -63.f;
     constexpr float cStartYaw = 1.55f;
-    constexpr float cClimbSeconds = 1.1f;
 
-    if (!m_traceMount.first)
-        return;
-
-    const float cElapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_traceStart).count();
-    if (cElapsed > cClimbSeconds)
+    if (!m_traceMount.first || std::chrono::steady_clock::now() - m_traceStart > cSeatWindow)
         return;
 
     auto* pRider = Cast<Actor>(TESForm::GetById(m_traceMount.first));
@@ -1152,9 +1146,9 @@ void CharacterService::SeatRemoteRider() noexcept
     if (!pRider || !pMount)
         return;
 
-    const float t = cElapsed / cClimbSeconds;
-    const float cYawDelta = cStartYaw * (1.f - t * t * (3.f - 2.f * t));
-    pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, pMount->rotation.z + cYawDelta);
+    const float cYaw = pMount->rotation.z;
+    pRider->ForcePosition(glm::vec3(pMount->position.x + cStartRight * std::cos(cYaw), pMount->position.y - cStartRight * std::sin(cYaw), pMount->position.z));
+    pRider->SetRotation(pRider->rotation.x, pRider->rotation.y, cYaw + cStartYaw);
 }
 
 void CharacterService::RunMountDismountUpdates() noexcept
