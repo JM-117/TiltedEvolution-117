@@ -1126,14 +1126,11 @@ bool CharacterService::IsMountOccupiedByOther(const uint32_t aMountFormId, const
 }
 
 // The rider's client is the only one that sees its mount as ridden, so it tells the server when the rider gets off.
-// A remote rider never plays the climb (the engine skips its package), so the snapshots lift it from the ground to the saddle
-// over about a second, flailing in the air. Put it on the saddle at once and let the snapshots take over afterwards.
+// The remote rider plays the climb animation, which lifts it to the saddle by itself, while the snapshots lift it too, so it
+// shot above the horse. While the climb plays, hold it at the horse's feet and let only the animation lift it.
 void CharacterService::SeatRemoteRider() noexcept
 {
     constexpr auto cSeatWindow = 1500ms;
-    // Height of a seated rider's root above the horse's root, measured in the MountTrace logs (130 and 131)
-    constexpr float cSeatHeight = 130.f;
-
     if (!m_traceMount.first || std::chrono::steady_clock::now() - m_traceStart > cSeatWindow)
         return;
 
@@ -1142,7 +1139,7 @@ void CharacterService::SeatRemoteRider() noexcept
     if (!pRider || !pMount)
         return;
 
-    pRider->ForcePosition(glm::vec3(pMount->position.x, pMount->position.y, pMount->position.z + cSeatHeight));
+    pRider->ForcePosition(glm::vec3(pMount->position.x, pMount->position.y, pMount->position.z));
 }
 
 void CharacterService::RunMountDismountUpdates() noexcept
