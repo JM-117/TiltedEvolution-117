@@ -1,5 +1,6 @@
 #pragma once
 #include <unordered_map>
+#include <unordered_set>
 #include "Structs/Inventory.h"
 #include "Structs/ActorData.h"
 
