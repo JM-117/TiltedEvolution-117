@@ -107,7 +107,9 @@ private:
         uint32_t MountId{};
         bool Enter{};
         bool Active{};
+        bool Ending{};
         std::chrono::steady_clock::time_point Start{};
+        std::chrono::steady_clock::time_point End{};
     };
     mutable std::unordered_map<uint32_t, RiderPair> m_riderPairs; // remote rider form id -> its mount and running pair animation
     mutable std::pair<uint32_t, uint32_t> m_traceMount{};
