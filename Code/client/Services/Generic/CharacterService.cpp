@@ -1383,8 +1383,6 @@ void CharacterService::RunMountDismountUpdates() noexcept
 
     if (m_localTrace.first)
     {
-        if (auto* pLocalRider = Cast<Actor>(TESForm::GetById(m_localTrace.first)))
-
         static std::chrono::steady_clock::time_point lastLocalTrace;
         const auto traceNow = std::chrono::steady_clock::now();
         if (traceNow - m_localTraceStart > 10s)
@@ -1410,7 +1408,6 @@ void CharacterService::RunMountDismountUpdates() noexcept
 
     if (m_traceMount.first)
     {
-        if (auto* pRemoteRider = Cast<Actor>(TESForm::GetById(m_traceMount.first)))
         static std::chrono::steady_clock::time_point lastTrace;
         const auto traceNow = std::chrono::steady_clock::now();
         if (traceNow - m_traceStart > 10s)
