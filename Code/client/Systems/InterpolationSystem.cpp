@@ -119,6 +119,25 @@ void InterpolationSystem::Update(Actor* apActor, InterpolationComponent& aInterp
     const auto finalZ = TiltedPhoques::Mod(rotA.z + deltaZ, float(TiltedPhoques::Pi * 2));
 
     apActor->SetRotation(finalX, finalY, finalZ);
+
+    auto* pProcess = apActor->currentProcess;
+    if (!pProcess || !pProcess->middleProcess)
+        return;
+
+    pProcess->middleProcess->pitch = -finalX;
+
+    if (apActor->GetExtension()->IsRemotePlayer())
+    {
+        if (second.HasLookAt)
+        {
+            const NiPoint3 cTarget = apActor->GetLookingAtLocation() + second.LookOffset;
+            pProcess->SetHeadTrackTarget(apActor, cTarget);
+        }
+        else
+        {
+            pProcess->middleProcess->lookAt = false;
+        }
+    }
 }
 
 void InterpolationSystem::AddPoint(InterpolationComponent& aInterpolationComponent, InterpolationComponent::TimePoint aPoint, const double aArrivalTime) noexcept

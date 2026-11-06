@@ -17,6 +17,8 @@ struct InterpolationComponent
         glm::vec3 Rotation{};
         AnimationVariables Variables{};
         float Direction{};
+        bool HasLookAt{};
+        glm::vec3 LookOffset{};
 
         TimePoint() = default;
     };

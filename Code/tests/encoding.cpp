@@ -434,6 +434,10 @@ TEST_CASE("Packets", "[encoding.packets]")
         auto& move = sendMessage.Updates[1];
         move.Position.x = 1234.5f;
         move.Direction = 0.75f;
+        move.HasLookAt = true;
+        move.LookOffset.x = -320.f;
+        move.LookOffset.y = 215.f;
+        move.LookOffset.z = -48.f;
 
         AnimationVariables vars;
         vars.Booleans.resize(76);
@@ -526,6 +530,64 @@ TEST_CASE("Packets", "[encoding.packets]")
         REQUIRE(pMessage);
         REQUIRE(pMessage->GetOpcode() == sendMessage.GetOpcode());
         REQUIRE(*CastUnique<NotifyActionEvents>(std::move(pMessage)) == sendMessage);
+    }
+
+    GIVEN("RequestInventorySnapshot")
+    {
+        Inventory::Entry armor;
+        armor.BaseId.BaseId = 0x12E46;
+        armor.Count = 1;
+        armor.ExtraWorn = true;
+
+        Inventory::Entry gold;
+        gold.BaseId.BaseId = 0xF;
+        gold.Count = 250;
+
+        RequestInventorySnapshot sendMessage;
+        sendMessage.ServerId = 0x10042;
+        sendMessage.OwnershipEpoch = 7;
+        sendMessage.CurrentInventory.Entries = {armor, gold};
+        sendMessage.CurrentInventory.CurrentMagicEquipment.RightHandSpell.BaseId = 0x12FCD;
+
+        Buffer buff(1000);
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+
+        Buffer::Reader reader(&buff);
+
+        const ClientMessageFactory factory;
+        auto pMessage = factory.Extract(reader);
+
+        REQUIRE(pMessage);
+        REQUIRE(pMessage->GetOpcode() == sendMessage.GetOpcode());
+        REQUIRE(*CastUnique<RequestInventorySnapshot>(std::move(pMessage)) == sendMessage);
+    }
+
+    GIVEN("NotifyInventorySnapshot")
+    {
+        Inventory::Entry armor;
+        armor.BaseId.BaseId = 0x12E46;
+        armor.Count = 1;
+        armor.ExtraWornLeft = true;
+
+        NotifyInventorySnapshot sendMessage;
+        sendMessage.ServerId = 0x10042;
+        sendMessage.OwnershipEpoch = 7;
+        sendMessage.CurrentInventory.Entries = {armor};
+        sendMessage.CurrentInventory.CurrentMagicEquipment.Shout.BaseId = 0x13E07;
+
+        Buffer buff(1000);
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+
+        Buffer::Reader reader(&buff);
+
+        const ServerMessageFactory factory;
+        auto pMessage = factory.Extract(reader);
+
+        REQUIRE(pMessage);
+        REQUIRE(pMessage->GetOpcode() == sendMessage.GetOpcode());
+        REQUIRE(*CastUnique<NotifyInventorySnapshot>(std::move(pMessage)) == sendMessage);
     }
 }
 

@@ -58,17 +58,10 @@
 
 namespace
 {
-void QueueActorInventoryChange(Actor* apActor, InventoryChangeEvent aEvent, TESObjectREFR* apTransferReference = nullptr)
+// AI updates run on job threads, so ownership is resolved when the runner hands the event to the main thread
+void QueueActorInventoryChange(InventoryChangeEvent aEvent, TESObjectREFR* apTransferReference = nullptr)
 {
-    auto ownershipToken = Utils::GetLocalOwnershipToken(apActor->formID);
-    if (!ownershipToken && apTransferReference == PlayerCharacter::Get())
-        ownershipToken = Utils::GetRemoteOwnershipToken(apActor->formID);
-
-    if (!ownershipToken)
-        return;
-
-    aEvent.ServerId = ownershipToken->ServerId;
-    aEvent.OwnershipEpoch = ownershipToken->OwnershipEpoch;
+    aEvent.IsPlayerTransfer = apTransferReference && apTransferReference == PlayerCharacter::Get();
     World::Get().GetRunner().Trigger(std::move(aEvent));
 }
 }
@@ -1073,7 +1066,7 @@ void TP_MAKE_THISCALL(HookAddInventoryItem, Actor, TESBoundObject* apItem, Extra
         if (apExtraData)
             apThis->GetItemFromExtraData(item, apExtraData);
 
-        QueueActorInventoryChange(apThis, InventoryChangeEvent(apThis->formID, std::move(item)), apOldOwner);
+        QueueActorInventoryChange(InventoryChangeEvent(apThis->formID, std::move(item)), apOldOwner);
     }
 
     TiltedPhoques::ThisCall(RealAddInventoryItem, apThis, apItem, apExtraData, aCount, apOldOwner);
@@ -1096,7 +1089,7 @@ void* TP_MAKE_THISCALL(HookPickUpObject, Actor, TESObjectREFR* apObject, int32_t
         // The inventory change event should always be sent to the server, otherwise the server inventory won't be updated.
         bool shouldUpdateClients = apObject->IsTemporary() && !ScopedActivateOverride::IsOverriden();
 
-        QueueActorInventoryChange(apThis, InventoryChangeEvent(apThis->formID, std::move(item), false, shouldUpdateClients));
+        QueueActorInventoryChange(InventoryChangeEvent(apThis->formID, std::move(item), false, shouldUpdateClients));
     }
 
     return TiltedPhoques::ThisCall(RealPickUpObject, apThis, apObject, aCount, aUnk1, aUnk2);
@@ -1118,7 +1111,7 @@ void* TP_MAKE_THISCALL(HookDropObject, Actor, void* apResult, TESBoundObject* ap
     if (apExtraData)
         apThis->GetItemFromExtraData(item, apExtraData);
 
-    QueueActorInventoryChange(apThis, InventoryChangeEvent(apThis->formID, std::move(item), true));
+    QueueActorInventoryChange(InventoryChangeEvent(apThis->formID, std::move(item), true));
 
     ScopedInventoryOverride _;
 
@@ -1261,6 +1254,18 @@ char TP_MAKE_THISCALL(HookActorProcess, Actor, float aDeltaTime)
     return TiltedPhoques::ThisCall(RealActorProcess, apThis, aDeltaTime);
 }
 
+TP_THIS_FUNCTION(TProcessTracking, void, Actor, float aDelta);
+static TProcessTracking* RealProcessTracking = nullptr;
+
+void TP_MAKE_THISCALL(HookProcessTracking, Actor, float aDelta)
+{
+    // See InterpolationSystem's `lookAt` logic
+    if (apThis->GetExtension()->IsRemotePlayer())
+        return;
+
+    TiltedPhoques::ThisCall(RealProcessTracking, apThis, aDelta);
+}
+
 TP_THIS_FUNCTION(TAddDeathItems, void, Actor);
 static TAddDeathItems* RealAddDeathItems = nullptr;
 
@@ -1310,6 +1315,7 @@ static TiltedPhoques::Initializer s_actorHooks(
         POINTER_SKYRIMSE(TSpeakSoundFunction, s_speakSoundFunction, 37542);
         POINTER_SKYRIMSE(TAddDeathItems, addDeathItems, 37198);
         POINTER_SKYRIMSE(TIsFleeing, isFleeing, 37577);
+        POINTER_SKYRIMSE(TProcessTracking, s_processTracking, 38009);
 
         RealActorProcess = s_actorProcess.Get();
         RealSetPosition = s_setPosition.Get();
@@ -1332,8 +1338,10 @@ static TiltedPhoques::Initializer s_actorHooks(
         RealSpeakSoundFunction = s_speakSoundFunction.Get();
         RealAddDeathItems = addDeathItems.Get();
         RealIsFleeing = isFleeing.Get();
+        RealProcessTracking = s_processTracking.Get();
 
         TP_HOOK(&RealActorProcess, HookActorProcess);
+        TP_HOOK(&RealProcessTracking, HookProcessTracking);
         TP_HOOK(&RealSetPosition, HookSetPosition);
         TP_HOOK(&RealRemoveSpell, HookRemoveSpell);
         TP_HOOK(&RealCharacterConstructor, HookCharacterConstructor);
