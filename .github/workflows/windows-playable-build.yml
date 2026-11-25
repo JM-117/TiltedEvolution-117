@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - master
+      - 'claude/**'
   workflow_call:
 
 jobs:
