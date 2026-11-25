@@ -427,6 +427,33 @@ TEST_CASE("Packets", "[encoding.packets]")
         REQUIRE(sendMessage == recvMessage);
     }
 
+    SECTION("AssignCharacterResponse")
+    {
+        Buffer buff(1000);
+
+        AssignCharacterResponse sendMessage, recvMessage;
+        sendMessage.Cookie = 1234;
+        sendMessage.ServerId = 42;
+        sendMessage.OwnershipEpoch = 7;
+        sendMessage.Owner = true;
+        sendMessage.IsDead = true;
+        sendMessage.LeveledNpcPickId = GameId{1, 0x1234};
+        sendMessage.ForceDead = true;
+
+        Buffer::Writer writer(&buff);
+        sendMessage.Serialize(writer);
+
+        Buffer::Reader reader(&buff);
+
+        uint64_t trash;
+        reader.ReadBits(trash, 8); // pop opcode
+
+        recvMessage.DeserializeRaw(reader);
+
+        REQUIRE(sendMessage == recvMessage);
+        REQUIRE(recvMessage.ForceDead);
+    }
+
     GIVEN("ClientReferencesMoveRequest")
     {
         ClientReferencesMoveRequest sendMessage, recvMessage;

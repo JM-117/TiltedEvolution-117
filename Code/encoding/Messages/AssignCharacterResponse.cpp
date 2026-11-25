@@ -16,6 +16,7 @@ void AssignCharacterResponse::SerializeRaw(TiltedPhoques::Buffer::Writer& aWrite
     Serialization::WriteBool(aWriter, IsDead);
     Serialization::WriteBool(aWriter, IsWeaponDrawn);
     LeveledNpcPickId.Serialize(aWriter);
+    Serialization::WriteBool(aWriter, ForceDead);
 }
 
 void AssignCharacterResponse::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -34,4 +35,5 @@ void AssignCharacterResponse::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRea
     IsDead = Serialization::ReadBool(aReader);
     IsWeaponDrawn = Serialization::ReadBool(aReader);
     LeveledNpcPickId.Deserialize(aReader);
+    ForceDead = Serialization::ReadBool(aReader);
 }

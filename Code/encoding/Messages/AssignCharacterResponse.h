@@ -23,7 +23,7 @@ struct AssignCharacterResponse final : ServerMessage
     bool operator==(const AssignCharacterResponse& achRhs) const noexcept
     {
         return GetOpcode() == achRhs.GetOpcode() && Cookie == achRhs.Cookie && ServerId == achRhs.ServerId && PlayerId == achRhs.PlayerId && Position == achRhs.Position && CellId == achRhs.CellId && WorldSpaceId == achRhs.WorldSpaceId && AllActorValues == achRhs.AllActorValues &&
-               CurrentInventory == achRhs.CurrentInventory && ActionsToReplay == achRhs.ActionsToReplay && OwnershipEpoch == achRhs.OwnershipEpoch && Owner == achRhs.Owner && IsDead == achRhs.IsDead && IsWeaponDrawn == achRhs.IsWeaponDrawn && LeveledNpcPickId == achRhs.LeveledNpcPickId;
+               CurrentInventory == achRhs.CurrentInventory && ActionsToReplay == achRhs.ActionsToReplay && OwnershipEpoch == achRhs.OwnershipEpoch && Owner == achRhs.Owner && IsDead == achRhs.IsDead && IsWeaponDrawn == achRhs.IsWeaponDrawn && LeveledNpcPickId == achRhs.LeveledNpcPickId && ForceDead == achRhs.ForceDead;
     }
 
     uint32_t Cookie{};
@@ -40,4 +40,6 @@ struct AssignCharacterResponse final : ServerMessage
     bool Owner{false};
     bool IsDead{};
     bool IsWeaponDrawn{};
+    // The server kept this actor's death after nobody had it loaded: unlike IsDead, apply it even when we own the actor.
+    bool ForceDead{};
 };

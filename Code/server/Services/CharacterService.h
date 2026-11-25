@@ -2,6 +2,7 @@
 
 #include <Events/PacketEvent.h>
 #include <Structs/ActorData.h>
+#include <Structs/Inventory.h>
 
 struct UpdateEvent;
 struct CharacterInteriorCellChangeEvent;
@@ -80,6 +81,10 @@ protected:
 
 private:
     World& m_world;
+
+    // Dead actors whose server entity was destroyed, so a later loader gets them dead and with their looted inventory.
+    // shortcut: lives until server restart, so an NPC respawned by a cell reset comes back dead; store game time to expire if it matters.
+    mutable Map<GameId, Inventory> m_deadActors;
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_exteriorCellChangeEventConnection;

@@ -450,7 +450,15 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
         // Applying it would e.g. Respawn() (Resurrect + Reset) an actor that was killed while the request was in flight,
         // which re-rolls leveled temporary actors, removes them, and makes them get rediscovered as new entities endlessly.
         // Any local change since the request (e.g. death) is picked up by the usual LocalComponent diffing instead.
-        if (pActor->IsDead() != acMessage.IsDead)
+        if (acMessage.ForceDead)
+        {
+            // Killed while nobody had it loaded: take the server's corpse, including what was looted from it.
+            spdlog::info("Local actor {:X} was killed elsewhere, applying the server's death and inventory", pActor->formID);
+            pActor->SetActorInventory(acMessage.CurrentInventory);
+            if (!pActor->IsDead())
+                pActor->Kill();
+        }
+        else if (pActor->IsDead() != acMessage.IsDead)
             spdlog::info("Local actor {:X} death state changed while its assignment was in flight (server: {}, local: {}), keeping local state", pActor->formID, acMessage.IsDead, pActor->IsDead());
 
         m_weaponDrawUpdates.erase(pActor->formID);
